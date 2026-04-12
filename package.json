@@ -1,0 +1,17 @@
+{
+  "name": "garimpeiro-lcar",
+  "version": "1.0.0",
+  "description": "Sistema automático de busca de oportunidades de compra de veículos - L-Car Seminovos",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "garimpar": "RUN_ON_START=true node index.js",
+    "dev": "RUN_ON_START=true node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "node-cron": "^3.0.0"
+  }
+}
