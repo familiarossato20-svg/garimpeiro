@@ -17,7 +17,7 @@ async function buscarWebmotors(modelo, marca) {
     try {
       console.log(`[WM] Buscando: ${marca} ${modelo} em ${estado}...`);
       
-      const { data, status, headers } = await axios.get('https://www.webmotors.com.br/api/search/car', {
+      const { data, status } = await axios.get('https://www.webmotors.com.br/api/search/car', {
         params: {
           Make: marca, Model: modelo,
           State: estadoNome,
@@ -32,62 +32,39 @@ async function buscarWebmotors(modelo, marca) {
         timeout: 15000,
       });
 
-      console.log(`[WM] ${estado}: HTTP ${status}, content-type: ${headers['content-type']}`);
-      console.log(`[WM] ${estado}: tipo data: ${typeof data}`);
-      
-      if (typeof data === 'string') {
-        console.log(`[WM] ${estado}: resposta eh string, primeiros 200 chars: ${data.substring(0, 200)}`);
-        continue;
-      }
-      
-      console.log(`[WM] ${estado}: keys: ${Object.keys(data).join(', ')}`);
-      
-      // Tentar todas as possiveis estruturas
-      let items = [];
-      if (data.SearchResults) { items = data.SearchResults; console.log('[WM] Usando SearchResults'); }
-      else if (data.Vehicles) { items = data.Vehicles; console.log('[WM] Usando Vehicles'); }
-      else if (data.Result) { items = data.Result; console.log('[WM] Usando Result'); }
-      else if (data.results) { items = data.results; console.log('[WM] Usando results'); }
-      else if (data.data) { items = data.data; console.log('[WM] Usando data.data'); }
-      else if (Array.isArray(data)) { items = data; console.log('[WM] data eh array direto'); }
-      else {
-        console.log(`[WM] ${estado}: estrutura desconhecida. Primeiro nivel:`);
-        for (const key of Object.keys(data).slice(0, 10)) {
-          const val = data[key];
-          console.log(`  ${key}: ${typeof val} ${Array.isArray(val) ? '(array len=' + val.length + ')' : typeof val === 'object' ? '(obj keys=' + Object.keys(val || {}).slice(0,5).join(',') + ')' : String(val).substring(0, 50)}`);
-        }
-      }
-
-      console.log(`[WM] ${estado}: ${items.length} items encontrados`);
-      
-      if (items.length > 0) {
-        const sample = items[0];
-        console.log(`[WM] Amostra keys: ${Object.keys(sample).slice(0, 15).join(', ')}`);
-        console.log(`[WM] Amostra: Make=${sample.Make}, Model=${sample.Model}, Price=${sample.Price}, Year=${sample.YearFabrication || sample.YearModel}`);
-      }
+      console.log(`[WM] ${estado}: HTTP ${status}`);
+      const items = data?.SearchResults || [];
+      console.log(`[WM] ${estado}: ${items.length} items`);
 
       items.forEach(item => {
         try {
-          const preco = item.Price || item.Prices?.Price || 0;
-          const ano = item.YearFabrication || item.YearModel || 0;
+          const spec = item.Specification || item;
+          const preco = spec.Price || spec.price || 0;
+          const ano = spec.YearFabrication || spec.YearModel || spec.Year || 0;
+          const make = spec.Make || spec.make || marca;
+          const model = spec.Model || spec.model || modelo;
+          const version = spec.Version || spec.version || '';
+          const city = spec.City || spec.city || '';
+          const km = spec.Odometer || spec.NumberPorts || '';
+
           if (preco < config.filtros.precoMin || preco > config.filtros.precoMax) return;
-          if (ano < config.filtros.anoMinimo) return;
+          if (ano > 0 && ano < config.filtros.anoMinimo) return;
 
           resultados.push({
             fonte: 'Webmotors',
-            titulo: `${item.Make || marca} ${item.Model || modelo} ${item.Version || ''}`.trim(),
-            marca: item.Make || marca,
-            modelo: item.Model || modelo,
+            titulo: `${make} ${model} ${version}`.trim(),
+            marca: make,
+            modelo: model,
             ano, preco,
-            km: item.Odometer ? `${item.Odometer} km` : '',
-            cidade: item.City || '',
+            km: km ? `${km} km` : '',
+            cidade: city,
             estado: estado,
             link: item.DetailUrl || `https://www.webmotors.com.br/comprar/${item.UniqueId}`,
-            particular: !item.Seller || item.Seller?.SellerType === 'PF',
+            particular: true,
             dataAnuncio: '',
-            imagem: item.Media?.[0]?.Path || '',
+            imagem: item.Media?.[0]?.Path || item.PhotoPath || '',
           });
-        } catch(e) { console.log(`[WM] Erro parse item: ${e.message}`); }
+        } catch(e) { console.log(`[WM] Erro parse: ${e.message}`); }
       });
     } catch (err) {
       console.log(`[WM] ERRO ${modelo} ${estado}: HTTP ${err.response?.status || 'N/A'} - ${err.message}`);
