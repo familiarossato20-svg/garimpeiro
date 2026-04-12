@@ -1,13 +1,10 @@
 const axios = require('axios');
 const config = require('./config');
 
-// Mercado Livre tem uma API mais acessível
-// Endpoint: https://api.mercadolibre.com/sites/MLB/search
-
 const ESTADOS_ML = {
-  'SC': 'TUxCUFNBTk8',  // Santa Catarina
-  'PR': 'TUxCUFBBUk4',  // Paraná
-  'RS': 'TUxCUFJJT0c',  // Rio Grande do Sul
+  'SC': 'TUxCUFNBTk8',
+  'PR': 'TUxCUFBBUk4',
+  'RS': 'TUxCUFJJT0c',
 };
 
 async function buscarMercadoLivre(modelo, marca) {
@@ -19,74 +16,83 @@ async function buscarMercadoLivre(modelo, marca) {
 
     try {
       const query = `${marca} ${modelo}`.trim();
+      console.log(`[ML] Buscando: ${query} em ${estado}...`);
 
-      const { data } = await axios.get('https://api.mercadolibre.com/sites/MLB/search', {
+      const { data, status } = await axios.get('https://api.mercadolibre.com/sites/MLB/search', {
         params: {
           q: query,
-          category: 'MLB1744', // Carros e Caminhonetes
+          category: 'MLB1744',
           state: estadoId,
           price: `${config.filtros.precoMin}-${config.filtros.precoMax}`,
-          ITEM_CONDITION: '2230581', // Usado
+          ITEM_CONDITION: '2230581',
           sort: 'price_asc',
           limit: 50,
+        },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
         },
         timeout: 15000,
       });
 
+      console.log(`[ML] ${estado}: HTTP ${status}, ${data.results?.length || 0} resultados de ${data.paging?.total || 0} total`);
+
       if (data && data.results) {
-        const anuncios = data.results
-          .filter(item => {
-            // Filtrar por ano
-            const anoAttr = item.attributes?.find(a => a.id === 'VEHICLE_YEAR');
-            const ano = parseInt(anoAttr?.value_name);
-            if (ano && ano < config.filtros.anoMinimo) return false;
-
-            // Filtrar lojistas (seller_type)
-            if (config.filtros.apenasParticular) {
-              const isProfessional = item.seller?.seller_reputation?.level_id === 'platinum' ||
-                                    item.seller?.car_dealer === true;
-              if (isProfessional) return false;
-            }
-
-            return true;
-          })
-          .map(item => {
+        data.results.forEach(item => {
+          try {
             const anoAttr = item.attributes?.find(a => a.id === 'VEHICLE_YEAR');
             const kmAttr = item.attributes?.find(a => a.id === 'KILOMETERS');
+            const ano = parseInt(anoAttr?.value_name) || 0;
+            if (ano > 0 && ano < config.filtros.anoMinimo) return;
 
-            return {
+            resultados.push({
               fonte: 'MercadoLivre',
               titulo: item.title || '',
-              marca: marca,
-              modelo: modelo,
-              ano: parseInt(anoAttr?.value_name) || 0,
+              marca, modelo, ano,
               preco: item.price || 0,
               km: kmAttr?.value_name || '',
               cidade: item.seller_address?.city?.name || '',
-              estado: item.seller_address?.state?.id?.slice(-2) || estado,
+              estado: estado,
               link: item.permalink || '',
               particular: true,
               dataAnuncio: item.stop_time || '',
               imagem: item.thumbnail || '',
-            };
-          })
-          .filter(a => a.preco >= config.filtros.precoMin && a.preco <= config.filtros.precoMax);
-
-        resultados.push(...anuncios);
-        console.log(`[ML] ${query} em ${estado}: ${anuncios.length} anúncios`);
+            });
+          } catch(e) {}
+        });
       }
     } catch (err) {
-      console.log(`[ML] Erro ${modelo} em ${estado}: ${err.message}`);
+      console.log(`[ML] ERRO ${modelo} ${estado}: HTTP ${err.response?.status || 'N/A'} - ${err.message}`);
+      
+      if (err.response?.status === 403) {
+        console.log(`[ML] Tentando sem filtro de estado...`);
+        try {
+          const { data } = await axios.get('https://api.mercadolibre.com/sites/MLB/search', {
+            params: { q: `${marca} ${modelo} ${estado}`, category: 'MLB1744', limit: 20 },
+            timeout: 15000,
+          });
+          console.log(`[ML] Fallback: ${data.results?.length || 0} resultados`);
+          data.results?.forEach(item => {
+            const ano = parseInt(item.attributes?.find(a => a.id === 'VEHICLE_YEAR')?.value_name) || 0;
+            if (ano > 0 && ano < config.filtros.anoMinimo) return;
+            if (item.price < config.filtros.precoMin || item.price > config.filtros.precoMax) return;
+            resultados.push({
+              fonte: 'MercadoLivre', titulo: item.title || '', marca, modelo, ano,
+              preco: item.price || 0, km: item.attributes?.find(a => a.id === 'KILOMETERS')?.value_name || '',
+              cidade: item.seller_address?.city?.name || '', estado,
+              link: item.permalink || '', particular: true, dataAnuncio: '', imagem: item.thumbnail || '',
+            });
+          });
+        } catch(e2) {
+          console.log(`[ML] Fallback tambem falhou: ${e2.message}`);
+        }
+      }
     }
-
     await sleep(1500);
   }
-
+  console.log(`[ML] Total ${marca} ${modelo}: ${resultados.length}`);
   return resultados;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 module.exports = { buscarMercadoLivre };
