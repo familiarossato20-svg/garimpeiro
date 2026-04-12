@@ -7,7 +7,11 @@ const ESTADOS_WM = {
   'RS': 'Rio Grande do Sul',
 };
 
-let loggedSample = false;
+function str(val) {
+  if (!val) return '';
+  if (typeof val === 'string') return val;
+  return val.Name || val.name || val.Value || val.value || val.Label || String(val);
+}
 
 async function buscarWebmotors(modelo, marca) {
   const resultados = [];
@@ -38,35 +42,17 @@ async function buscarWebmotors(modelo, marca) {
       const items = data?.SearchResults || [];
       console.log(`[WM] ${estado}: ${items.length} items`);
 
-      // Log FULL first item structure once
-      if (items.length > 0 && !loggedSample) {
-        loggedSample = true;
-        const sample = items[0];
-        console.log('[WM] === ITEM COMPLETO ===');
-        console.log(JSON.stringify(sample, null, 2).substring(0, 1500));
-        console.log('[WM] === FIM ITEM ===');
-        if (sample.Specification) {
-          console.log('[WM] Specification keys: ' + Object.keys(sample.Specification).join(', '));
-          console.log('[WM] Specification values: ' + JSON.stringify(sample.Specification).substring(0, 500));
-        }
-        // Also try Prices sub-object
-        if (sample.Prices) {
-          console.log('[WM] Prices: ' + JSON.stringify(sample.Prices));
-        }
-      }
-
       items.forEach(item => {
         try {
-          const spec = item.Specification || {};
+          const spec = item.Specification || item;
           const prices = item.Prices || {};
-          // Try ALL possible price fields
-          const preco = spec.Price || prices.Price || prices.SearchPrice || item.Price || spec.price || 0;
-          const ano = spec.YearFabrication || spec.YearModel || spec.Year || item.YearFabrication || 0;
-          const make = spec.Make || spec.Brand || item.Make || marca;
-          const model = spec.Model || spec.ModelName || item.Model || modelo;
-          const version = spec.Version || item.Version || '';
-          const city = spec.City || item.City || '';
-          const km = spec.Odometer || spec.Km || item.Odometer || '';
+          const preco = spec.Price || prices.Price || prices.SearchPrice || 0;
+          const ano = spec.YearFabrication || spec.YearModel || 0;
+          const make = str(spec.Make) || marca;
+          const model = str(spec.Model) || modelo;
+          const version = str(spec.Version);
+          const city = str(spec.City);
+          const km = spec.Odometer || '';
 
           if (preco <= 0) return;
           if (preco < config.filtros.precoMin || preco > config.filtros.precoMax) return;
@@ -74,7 +60,7 @@ async function buscarWebmotors(modelo, marca) {
 
           resultados.push({
             fonte: 'Webmotors',
-            titulo: `${make} ${model} ${version}`.trim(),
+            titulo: `${make} ${model} ${version} ${ano}`.trim(),
             marca: make, modelo: model, ano, preco,
             km: km ? `${km} km` : '',
             cidade: city, estado: estado,
