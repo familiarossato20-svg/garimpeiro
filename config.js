@@ -1,20 +1,17 @@
 require('dotenv').config();
 
 module.exports = {
-  // Filtros de busca
   filtros: {
     precoMin: 5000,
     precoMax: 100000,
     margemMinima: 8000,
     anoMinimo: 2012,
-    custoPreparacao: 1500, // custo médio pra preparar o carro (revisão, polimento, etc)
+    custoPreparacao: 1500,
     regioes: ['SC', 'PR', 'RS'],
     apenasParticular: true,
   },
 
-  // Modelos prioritários (baseado nos dados de demanda da L-Car)
   modelosPrioritarios: [
-    // Alta demanda (vendem rápido na região)
     { modelo: 'Gol', marca: 'VW', prioridade: 1 },
     { modelo: 'Onix', marca: 'Chevrolet', prioridade: 1 },
     { modelo: 'Palio', marca: 'Fiat', prioridade: 1 },
@@ -23,8 +20,6 @@ module.exports = {
     { modelo: 'Sandero', marca: 'Renault', prioridade: 1 },
     { modelo: 'Classic', marca: 'Chevrolet', prioridade: 1 },
     { modelo: 'Saveiro', marca: 'VW', prioridade: 1 },
-    
-    // Média demanda
     { modelo: 'Argo', marca: 'Fiat', prioridade: 2 },
     { modelo: 'Cronos', marca: 'Fiat', prioridade: 2 },
     { modelo: 'Etios', marca: 'Toyota', prioridade: 2 },
@@ -40,8 +35,6 @@ module.exports = {
     { modelo: 'Fox', marca: 'VW', prioridade: 2 },
     { modelo: 'Voyage', marca: 'VW', prioridade: 2 },
     { modelo: 'Fiesta', marca: 'Ford', prioridade: 2 },
-    
-    // Alta margem (mais caros, demoram mais mas margem compensa)
     { modelo: 'Toro', marca: 'Fiat', prioridade: 3 },
     { modelo: 'Tucson', marca: 'Hyundai', prioridade: 3 },
     { modelo: 'HR-V', marca: 'Honda', prioridade: 3 },
@@ -54,24 +47,21 @@ module.exports = {
     { modelo: 'Sorento', marca: 'Kia', prioridade: 3 },
   ],
 
-  // APIs
   fipeApi: 'https://parallelum.com.br/fipe/api/v2',
-  
-  // WhatsApp
+
   whatsapp: {
     numeroLucas: process.env.WHATSAPP_NUMERO || '5548991458616',
   },
 
-  // Fontes de busca
+  // OLX e ML bloqueados do Railway (403). Localiza auth nao funciona.
+  // Apenas Webmotors funciona de cloud servers.
   fontes: {
-    olx: true,
+    olx: false,
     webmotors: true,
-    mercadolivre: true,
-    kavak: true,
-    localiza: true,
-    facebook: false, // requer token específico
+    mercadolivre: false,
+    localiza: false,
+    facebook: false,
   },
 
-  // Horário de execução (cron)
-  cronSchedule: '0 7 * * *', // todo dia às 7h
+  cronSchedule: '0 7 * * *',
 };
