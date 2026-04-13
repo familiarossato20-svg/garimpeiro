@@ -83,6 +83,119 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Diagnóstico — testa cada fonte e mostra resposta bruta
+  if (url.pathname === '/diagnostico' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+
+    const axios = require('axios');
+    const resultados = {};
+
+    // Teste 1: Webmotors API com url= param
+    try {
+      const wmResp = await axios.get('https://www.webmotors.com.br/api/search/car', {
+        params: {
+          url: 'https://www.webmotors.com.br/carros/estoque/volkswagen/gol/santa-catarina',
+          DisplayPerPage: 3,
+          DisplayPage: 1,
+        },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json',
+        },
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+      resultados.webmotors_api = {
+        status: wmResp.status,
+        hasSearchResults: !!(wmResp.data && wmResp.data.SearchResults),
+        count: wmResp.data?.SearchResults?.length || 0,
+        firstModel: wmResp.data?.SearchResults?.[0]?.Specification?.Model || null,
+        headers: { contentType: wmResp.headers['content-type'], server: wmResp.headers['server'] },
+      };
+    } catch (e) {
+      resultados.webmotors_api = { error: e.message, code: e.code };
+    }
+
+    // Teste 2: Webmotors HTML (scraping)
+    try {
+      const wmHtml = await axios.get('https://www.webmotors.com.br/carros/estoque/volkswagen/gol/santa-catarina', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html',
+        },
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+      const bodyPreview = typeof wmHtml.data === 'string' ? wmHtml.data.substring(0, 500) : 'non-string response';
+      const hasNextData = typeof wmHtml.data === 'string' && wmHtml.data.includes('__NEXT_DATA__');
+      const hasSearchResults = typeof wmHtml.data === 'string' && wmHtml.data.includes('SearchResults');
+      resultados.webmotors_html = {
+        status: wmHtml.status,
+        bodyLength: typeof wmHtml.data === 'string' ? wmHtml.data.length : 0,
+        hasNextData,
+        hasSearchResults,
+        bodyPreview,
+      };
+    } catch (e) {
+      resultados.webmotors_html = { error: e.message, code: e.code };
+    }
+
+    // Teste 3: Mercado Livre API
+    try {
+      const mlResp = await axios.get('https://api.mercadolibre.com/sites/MLB/search', {
+        params: {
+          q: 'Volkswagen Gol',
+          category: 'MLB1744',
+          state: 'TUxCUFNBTk8',
+          limit: 3,
+        },
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+      resultados.mercadolivre = {
+        status: mlResp.status,
+        count: mlResp.data?.results?.length || 0,
+        total: mlResp.data?.paging?.total || 0,
+        firstTitle: mlResp.data?.results?.[0]?.title || null,
+        firstPrice: mlResp.data?.results?.[0]?.price || null,
+      };
+    } catch (e) {
+      resultados.mercadolivre = { error: e.message, code: e.code };
+    }
+
+    // Teste 4: FIPE AppSpot
+    try {
+      const fipeResp = await axios.get('https://fipeapi.appspot.com/api/1/carros/marcas.json', {
+        timeout: 10000,
+        validateStatus: () => true,
+      });
+      resultados.fipe_appspot = {
+        status: fipeResp.status,
+        count: Array.isArray(fipeResp.data) ? fipeResp.data.length : 0,
+        firstBrand: fipeResp.data?.[0]?.fipe_name || null,
+      };
+    } catch (e) {
+      resultados.fipe_appspot = { error: e.message, code: e.code };
+    }
+
+    // Teste 5: FIPE Parallelum
+    try {
+      const fipe2 = await axios.get('https://parallelum.com.br/fipe/api/v2/cars/brands', {
+        timeout: 10000,
+        validateStatus: () => true,
+      });
+      resultados.fipe_parallelum = {
+        status: fipe2.status,
+        count: Array.isArray(fipe2.data) ? fipe2.data.length : 0,
+      };
+    } catch (e) {
+      resultados.fipe_parallelum = { error: e.message, code: e.code };
+    }
+
+    res.end(JSON.stringify(resultados, null, 2));
+    return;
+  }
+
   // 404
   res.writeHead(302, { 'Location': '/' });
   res.end();
