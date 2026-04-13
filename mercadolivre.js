@@ -1,6 +1,9 @@
 const axios = require('axios');
 const config = require('./config');
 
+const PROXY_URL = process.env.PROXY_URL || '';
+const PROXY_KEY = process.env.PROXY_KEY || 'garimpeiro-lcar-2026';
+
 const ESTADOS_ML = {
   'SC': 'TUxCUFNBTk8',
   'PR': 'TUxCUFBBUk4',
@@ -16,26 +19,43 @@ async function buscarMercadoLivre(modelo, marca) {
 
     try {
       const query = `${marca} ${modelo}`.trim();
-      console.log(`[ML] Buscando: ${query} em ${estado}...`);
 
-      const { data, status } = await axios.get('https://api.mercadolibre.com/sites/MLB/search', {
-        params: {
-          q: query,
-          category: 'MLB1744',
-          state: estadoId,
-          price: `${config.filtros.precoMin}-${config.filtros.precoMax}`,
-          ITEM_CONDITION: '2230581',
-          sort: 'price_asc',
-          limit: 50,
-        },
+      let data;
+
+      if (PROXY_URL) {
+        // Via proxy Cloudflare
+        const resp = await axios.get(`${PROXY_URL}/mercadolivre`, {
+          params: {
+            q: query,
+            state: estadoId,
+            price_min: config.filtros.precoMin,
+            price_max: config.filtros.precoMax,
+            limit: 50,
+            key: PROXY_KEY,
+          },
+          timeout: 20000,
+        });
+        data = resp.data;
+      } else {
+        // Direto
+        const resp = await axios.get('https://api.mercadolibre.com/sites/MLB/search', {
+          params: {
+            q: query,
+            category: 'MLB1744',
+            state: estadoId,
+            price: `${config.filtros.precoMin}-${config.filtros.precoMax}`,
+            ITEM_CONDITION: '2230581',
+            sort: 'price_asc',
+            limit: 50,
+          },
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'application/json',
         },
         timeout: 15000,
-      });
-
-      console.log(`[ML] ${estado}: HTTP ${status}, ${data.results?.length || 0} resultados de ${data.paging?.total || 0} total`);
+        });
+        data = resp.data;
+      }
 
       if (data && data.results) {
         data.results.forEach(item => {
