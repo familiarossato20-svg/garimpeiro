@@ -68,6 +68,31 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Import — recebe resultados do GitHub Actions
+  if (url.pathname === '/api/import' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const resultado = JSON.parse(body);
+        const dataStr = new Date().toISOString().split('T')[0];
+        const arquivo = `./resultados/garimpo-${dataStr}.json`;
+
+        if (!fs.existsSync('./resultados')) fs.mkdirSync('./resultados');
+        fs.writeFileSync(arquivo, JSON.stringify(resultado, null, 2));
+
+        console.log(`[IMPORT] Recebido: ${resultado.totalAnalisados} analisados, ${resultado.oportunidades?.length || 0} oportunidades (fonte: ${resultado.fonte || 'desconhecida'})`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, saved: arquivo }));
+      } catch (err) {
+        console.error('[IMPORT] Erro:', err.message);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   // Health
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
