@@ -3,6 +3,7 @@ const http = require('http');
 const config = require('./config');
 const { executarGarimpo } = require('./garimpeiro');
 const { gerarDashboardHTML } = require('./dashboard');
+const { statusAPIs } = require('./fipe');
 const fs = require('fs');
 
 // Criar pasta de resultados
@@ -76,6 +77,8 @@ const server = http.createServer(async (req, res) => {
       proximaExecucao: config.cronSchedule,
       filtros: config.filtros,
       modelosMonitorados: config.modelosPrioritarios.length,
+      fontesAtivas: Object.entries(config.fontes).filter(([k,v]) => v).map(([k]) => k),
+      fipeAPIs: statusAPIs(),
     }));
     return;
   }
@@ -87,12 +90,14 @@ const server = http.createServer(async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
+  const fontesAtivas = Object.entries(config.fontes).filter(([k,v]) => v).map(([k]) => k);
   console.log(`\n🔍 Garimpeiro L-Car rodando na porta ${PORT}`);
   console.log(`🌐 Dashboard: http://localhost:${PORT}`);
   console.log(`📅 Agendado: ${config.cronSchedule} (todo dia às 7h)`);
   console.log(`📍 Regiões: ${config.filtros.regioes.join(', ')}`);
   console.log(`💰 Margem mínima: R$ ${config.filtros.margemMinima.toLocaleString('pt-BR')}`);
-  console.log(`🚗 Modelos monitorados: ${config.modelosPrioritarios.length}\n`);
+  console.log(`🚗 Modelos monitorados: ${config.modelosPrioritarios.length}`);
+  console.log(`🔎 Fontes ativas: ${fontesAtivas.join(', ')}\n`);
 });
 
 // Agendar execução diária
