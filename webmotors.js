@@ -7,6 +7,14 @@ const ESTADOS_WM = {
   'RS': 'Rio Grande do Sul',
 };
 
+// Mapeamento de aliases de marca (config → possíveis nomes na API)
+const MARCA_ALIASES = {
+  'vw': ['volkswagen'],
+  'volkswagen': ['vw'],
+  'chevrolet': ['gm', 'gm - chevrolet'],
+  'gm': ['chevrolet'],
+};
+
 /**
  * Extrai string de um campo que pode ser string ou objeto {Name: "..."} ou {Value: "..."}
  */
@@ -17,8 +25,24 @@ function str(campo) {
   return String(campo);
 }
 
+// Mapeamento de nomes de marca pra formato da API Webmotors
+const MARCA_API = {
+  'VW': 'Volkswagen',
+  'Chevrolet': 'Chevrolet',  // API aceita Chevrolet direto
+  'Fiat': 'Fiat',
+  'Hyundai': 'Hyundai',
+  'Renault': 'Renault',
+  'Ford': 'Ford',
+  'Toyota': 'Toyota',
+  'Honda': 'Honda',
+  'Nissan': 'Nissan',
+  'Jeep': 'Jeep',
+  'Kia': 'Kia',
+};
+
 async function buscarWebmotors(modelo, marca) {
   const resultados = [];
+  const marcaAPI = MARCA_API[marca] || marca;
 
   for (const estado of config.filtros.regioes) {
     const estadoNome = ESTADOS_WM[estado];
@@ -27,7 +51,7 @@ async function buscarWebmotors(modelo, marca) {
     try {
       const { data } = await axios.get('https://www.webmotors.com.br/api/search/car', {
         params: {
-          Make: marca,
+          Make: marcaAPI,
           Model: modelo,
           State: estadoNome,
           PriceRange: `${config.filtros.precoMin}-${config.filtros.precoMax}`,
@@ -46,14 +70,24 @@ async function buscarWebmotors(modelo, marca) {
       if (data && data.SearchResults) {
         const anuncios = data.SearchResults
           .filter(item => {
-            // Dados podem estar na raiz ou em Specification
-            const spec = item.Specification || item;
-            const seller = item.Seller || spec.Seller || {};
+            // Webmotors é plataforma de lojas — NÃO filtrar por particular
+            // (SellerType é sempre "PJ" no Webmotors)
 
-            if (config.filtros.apenasParticular) {
-              const sellerType = str(seller.SellerType || seller.sellerType);
-              if (sellerType && sellerType !== 'PF') return false;
-            }
+            // Filtrar pelo modelo que realmente estamos buscando
+            // A API às vezes retorna resultados genéricos/promovidos que não batem
+            const spec = item.Specification || item;
+            const modeloResult = str(spec.Model).toLowerCase();
+            const makeResult = str(spec.Make).toLowerCase();
+            const modeloBusca = modelo.toLowerCase();
+            const marcaBusca = marca.toLowerCase();
+
+            // Verifica se o resultado é da marca/modelo que buscamos
+            const marcaOk = makeResult.includes(marcaBusca) || marcaBusca.includes(makeResult)
+              || MARCA_ALIASES[marcaBusca]?.some(a => makeResult.includes(a));
+            const modeloOk = modeloResult.includes(modeloBusca) || modeloBusca.includes(modeloResult);
+
+            if (!marcaOk || !modeloOk) return false;
+
             return true;
           })
           .map(item => {
@@ -66,22 +100,20 @@ async function buscarWebmotors(modelo, marca) {
             const version = str(spec.Version) || str(item.Version) || '';
 
             // Preço pode estar em diferentes lugares
-            const preco = spec.Price || item.Price
-              || item.Prices?.Price || spec.Prices?.Price
+            const preco = item.Prices?.Price || spec.Prices?.Price
+              || spec.Price || item.Price
               || 0;
 
-            // Ano pode estar em diferentes campos
-            const ano = spec.YearFabrication || spec.YearModel
-              || item.YearFabrication || item.YearModel
-              || 0;
+            // Ano — YearFabrication pode ser string "2021"
+            const ano = parseInt(spec.YearFabrication || spec.YearModel
+              || item.YearFabrication || item.YearModel) || 0;
 
-            // KM / Odometer
-            const km = spec.Odometer || item.Odometer || spec.NumberPorts || 0;
+            // KM / Odometer (NÃO NumberPorts que é portas!)
+            const km = spec.Odometer || item.Odometer || 0;
 
-            // Cidade
-            const cidade = str(spec.City) || str(item.City)
-              || str(spec.Localization?.City) || str(item.Localization?.City)
-              || '';
+            // Cidade — está em Seller, não em Specification
+            const seller = item.Seller || {};
+            const cidade = str(seller.City) || str(spec.City) || str(item.City) || '';
 
             // Link
             const uniqueId = item.UniqueId || spec.UniqueId || item.Id || '';
