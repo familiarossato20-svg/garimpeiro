@@ -68,8 +68,8 @@ module.exports = {
   // Fontes de busca — APENAS as que funcionam
   fontes: {
     olx: false,          // BLOQUEADO — HTTP 403 do IP Railway
-    webmotors: true,     // FUNCIONA — única fonte ativa
-    mercadolivre: false,  // BLOQUEADO — HTTP 403
+    webmotors: true,     // API + Cheerio scraping fallback
+    mercadolivre: true,  // API oficial — testar se funciona do Railway
     kavak: false,         // NÃO IMPLEMENTADO
     localiza: false,      // AUTH FALHOU — endpoint não existe
     facebook: false,      // requer token específico
