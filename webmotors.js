@@ -42,21 +42,25 @@ const MARCA_API = {
 
 async function buscarWebmotors(modelo, marca) {
   const resultados = [];
-  const marcaAPI = MARCA_API[marca] || marca;
+  const marcaSlug = (MARCA_API[marca] || marca).toLowerCase();
+  const modeloSlug = modelo.toLowerCase().replace(/[-\s]+/g, '-');
 
   for (const estado of config.filtros.regioes) {
     const estadoNome = ESTADOS_WM[estado];
     if (!estadoNome) continue;
 
     try {
+      // Formato correto: usar url= com path do site Webmotors
+      // Make/Model como query params não funcionam mais (API mudou)
+      const wmUrl = `https://www.webmotors.com.br/carros/estoque/${marcaSlug}/${modeloSlug}`;
+
       const { data } = await axios.get('https://www.webmotors.com.br/api/search/car', {
         params: {
-          Make: marcaAPI,
-          Model: modelo,
+          url: wmUrl,
           State: estadoNome,
           PriceRange: `${config.filtros.precoMin}-${config.filtros.precoMax}`,
           YearRange: `${config.filtros.anoMinimo}-2026`,
-          SearchOrder: 1, // menor preço
+          SearchOrder: 1,
           DisplayPerPage: 50,
           DisplayPage: 1,
         },
