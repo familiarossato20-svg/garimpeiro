@@ -2,8 +2,8 @@ name: Garimpo Diário
 
 on:
   schedule:
-    - cron: '0 10 * * *'  # 10h UTC = 7h BRT
-  workflow_dispatch:  # Manual trigger
+    - cron: '0 10 * * *'
+  workflow_dispatch:
   push:
     paths:
       - 'scraper-action.js'
@@ -27,12 +27,12 @@ jobs:
       - name: Run scraper
         run: node scraper-action.js
         env:
-          RAILWAY_URL: ${{ secrets.RAILWAY_URL }}
+          RAILWAY_URL: https://garimpeiro-production.up.railway.app
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: garimpo-${{ github.run_number }}
+          name: garimpo-results
           path: resultados/
           retention-days: 7
