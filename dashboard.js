@@ -132,6 +132,12 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
 
     .alert-bar { background: #332200; border: 1px solid #FFB300; color: #FFB300; padding: 12px 24px; margin: 0 24px 12px; border-radius: 8px; font-size: 13px; }
 
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #666; border-top-color: #00C853; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .btn-loading { opacity: 0.7; pointer-events: none; }
+    .status-msg { display: inline-block; margin-left: 8px; font-size: 12px; color: #00C853; vertical-align: middle; }
+    .status-msg.error { color: #E53935; }
+
     @media (max-width: 768px) {
       .kpis { grid-template-columns: repeat(2, 1fr); }
       th:nth-child(4), td:nth-child(4),
@@ -144,7 +150,7 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     <h1>🔍 Garimpeiro <span>L-Car</span></h1>
     <div class="subtitle ${modoFallback ? 'warning' : ''}">${subtitulo}</div>
     <div class="controls">
-      <select onchange="if(this.value) window.location='/resultado?data='+this.value">
+      <select onchange="if(this.value){setStatus('Carregando...',false);window.location.search='?data='+this.value}">
         <option value="">📅 Histórico</option>
         ${historicoOptions}
       </select>
@@ -162,8 +168,9 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
         <option value="RS">RS</option>
       </select>
       <input type="text" id="busca" placeholder="🔎 Buscar modelo..." oninput="filtrar()">
-      <button onclick="window.location='/garimpar'" class="btn-refresh">🔄 Garimpar agora</button>
-      <button onclick="window.location='/resultado'">📊 Atualizar</button>
+      <button id="btnGarimpar" onclick="garimparAgora()" class="btn-refresh">🔄 Garimpar agora</button>
+      <button id="btnAtualizar" onclick="atualizarDados()">📊 Atualizar</button>
+      <span id="statusMsg" class="status-msg"></span>
     </div>
   </div>
 
@@ -252,6 +259,102 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
         row.style.display = show ? '' : 'none';
         if (detRow) detRow.style.display = 'none';
       });
+    }
+
+    function setStatus(msg, isError) {
+      const el = document.getElementById('statusMsg');
+      el.textContent = msg;
+      el.className = 'status-msg' + (isError ? ' error' : '');
+    }
+
+    function setBtnLoading(btnId, loading, originalText) {
+      const btn = document.getElementById(btnId);
+      if (loading) {
+        btn._origText = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner"></span>' + (originalText || 'Aguarde...');
+        btn.classList.add('btn-loading');
+      } else {
+        btn.innerHTML = btn._origText || originalText;
+        btn.classList.remove('btn-loading');
+      }
+    }
+
+    async function garimparAgora() {
+      setBtnLoading('btnGarimpar', true, 'Garimpando...');
+      setStatus('Iniciando garimpo...', false);
+
+      try {
+        const resp = await fetch('/garimpar');
+        const data = await resp.json();
+
+        if (data.status === 'already_running') {
+          setStatus('Garimpo já está rodando, aguarde...', false);
+        } else {
+          setStatus('Garimpo iniciado! Buscando em todas as fontes...', false);
+        }
+
+        // Poll a cada 10s até completar
+        let tentativas = 0;
+        const maxTentativas = 60; // 10 min max
+        const poll = setInterval(async () => {
+          tentativas++;
+          try {
+            const st = await fetch('/api/garimpo-status');
+            const status = await st.json();
+
+            if (!status.rodando) {
+              clearInterval(poll);
+              setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
+              if (status.oportunidades > 0) {
+                setStatus('Pronto! ' + status.oportunidades + ' oportunidades. Atualizando...', false);
+              } else if (status.totalAnalisados > 0) {
+                setStatus('Pronto! ' + status.totalAnalisados + ' analisados, 0 com margem suficiente.', false);
+              } else {
+                setStatus('Concluído. Nenhum resultado (fontes podem estar bloqueadas).', true);
+              }
+              // Recarrega a página pra mostrar resultados
+              setTimeout(() => { window.location.reload(); }, 1500);
+            } else {
+              const mins = Math.floor(tentativas * 10 / 60);
+              const secs = (tentativas * 10) % 60;
+              setStatus('Garimpando... (' + mins + 'm' + secs + 's)', false);
+            }
+          } catch (e) {
+            // Ignora erros de polling
+          }
+
+          if (tentativas >= maxTentativas) {
+            clearInterval(poll);
+            setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
+            setStatus('Timeout. Verifique o dashboard em alguns minutos.', true);
+          }
+        }, 10000);
+
+      } catch (err) {
+        setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
+        setStatus('Erro: ' + err.message, true);
+      }
+    }
+
+    async function atualizarDados() {
+      setBtnLoading('btnAtualizar', true, 'Atualizando...');
+      setStatus('Carregando dados...', false);
+
+      try {
+        const resp = await fetch('/api/resultado');
+        const data = await resp.json();
+
+        if (data.error) {
+          setStatus('Nenhum resultado para hoje.', true);
+        } else {
+          setStatus('Dados atualizados! ' + (data.oportunidades?.length || 0) + ' oportunidades.', false);
+          setTimeout(() => { window.location.reload(); }, 500);
+        }
+      } catch (err) {
+        setStatus('Erro ao atualizar: ' + err.message, true);
+      }
+
+      setBtnLoading('btnAtualizar', false, '📊 Atualizar');
     }
   </script>
 </body>

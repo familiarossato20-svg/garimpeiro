@@ -51,11 +51,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Forçar garimpo
+  // Forçar garimpo (retorna JSON pra AJAX)
   if (url.pathname === '/garimpar' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<html><body style="background:#0a0a0a;color:#fff;font-family:sans-serif;padding:40px;text-align:center"><h2>🔍 Garimpo iniciado...</h2><p>Isso pode levar alguns minutos. Volte ao dashboard depois.</p><a href="/" style="color:#00C853">← Voltar ao dashboard</a></body></html>');
-    executarGarimpo().catch(err => console.error('Erro no garimpo:', err));
+    if (global._garimpoRodando) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'already_running' }));
+      return;
+    }
+    global._garimpoRodando = true;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'started' }));
+    executarGarimpo()
+      .then(() => { global._garimpoRodando = false; })
+      .catch(err => { global._garimpoRodando = false; console.error('Erro no garimpo:', err); });
+    return;
+  }
+
+  // Status do garimpo
+  if (url.pathname === '/api/garimpo-status' && req.method === 'GET') {
+    const dataHoje = new Date().toISOString().split('T')[0];
+    const resultado = carregarResultado(dataHoje);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      rodando: !!global._garimpoRodando,
+      temResultado: !!resultado,
+      totalAnalisados: resultado?.totalAnalisados || 0,
+      oportunidades: resultado?.oportunidades?.length || 0,
+    }));
     return;
   }
 
