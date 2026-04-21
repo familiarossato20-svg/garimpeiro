@@ -24,8 +24,8 @@ async function calcularMargem(anuncios) {
     try {
       fipeConsultas++;
 
-      // Consultar FIPE
-      const fipe = await consultarPrecoFipe(anuncio.marca, anuncio.modelo, anuncio.ano);
+      // Consultar FIPE — passa titulo como hint de versão
+      const fipe = await consultarPrecoFipe(anuncio.marca, anuncio.modelo, anuncio.ano, anuncio.titulo);
 
       if (!fipe || !fipe.preco) {
         fipeFalhas++;

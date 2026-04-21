@@ -150,8 +150,8 @@ async function buscarAnos(marcaCodigo, modeloCodigo) {
   return resultado || [];
 }
 
-async function consultarPrecoFipe(marcaNome, modeloNome, ano) {
-  const cacheKey = `preco_${marcaNome}_${modeloNome}_${ano}`;
+async function consultarPrecoFipe(marcaNome, modeloNome, ano, versao) {
+  const cacheKey = `preco_${marcaNome}_${modeloNome}_${ano}_${versao || ''}`;
   if (cache.has(cacheKey)) return cache.get(cacheKey);
 
   try {
@@ -184,21 +184,55 @@ async function consultarPrecoFipe(marcaNome, modeloNome, ano) {
       return null;
     }
 
-    // Encontrar modelo
+    // Encontrar modelo — prioriza match exato com versão
     const modelos = await buscarModelos(marcaCodigo);
     const modeloLower = modeloNome.toLowerCase();
+    const versaoLower = (versao || '').toLowerCase();
 
-    let modeloEncontrado = modelos.find(m =>
-      m.name.toLowerCase().includes(modeloLower) ||
-      modeloLower.includes(m.name.toLowerCase())
-    );
+    // 1. Buscar TODOS os modelos que matcham o nome base
+    const candidatos = modelos.filter(m => {
+      const n = m.name.toLowerCase();
+      return n.includes(modeloLower) || modeloLower.includes(n);
+    });
 
-    if (!modeloEncontrado) {
+    let modeloEncontrado = null;
+
+    if (candidatos.length === 0) {
       // Tenta match parcial (primeira palavra)
       const primeiraPalavra = modeloLower.split(' ')[0];
       modeloEncontrado = modelos.find(m =>
         m.name.toLowerCase().includes(primeiraPalavra)
       );
+    } else if (candidatos.length === 1) {
+      modeloEncontrado = candidatos[0];
+    } else {
+      // Múltiplos candidatos — tentar match pela versão
+      if (versaoLower) {
+        // Extrair palavras-chave da versão (ex: "1.0 12V MPI TOTALFLEX" → ["1.0", "12v", "mpi"])
+        const versaoWords = versaoLower.split(/[\s,.-]+/).filter(w => w.length > 1);
+        let bestScore = -1;
+
+        for (const cand of candidatos) {
+          const candLower = cand.name.toLowerCase();
+          let score = 0;
+          for (const word of versaoWords) {
+            if (candLower.includes(word)) score++;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            modeloEncontrado = cand;
+          }
+        }
+      }
+
+      // Se versão não ajudou, pegar o de nome mais curto (geralmente a versão base/mais barata)
+      if (!modeloEncontrado || versaoLower === '') {
+        modeloEncontrado = candidatos.reduce((shortest, c) =>
+          c.name.length < shortest.name.length ? c : shortest
+        , candidatos[0]);
+      }
+
+      console.log(`[FIPE] ${candidatos.length} versões para ${modeloNome}, selecionado: ${modeloEncontrado.name}`);
     }
 
     if (!modeloEncontrado) {

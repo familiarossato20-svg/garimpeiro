@@ -371,11 +371,20 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
           const ano = parseInt(spec.YearFabrication || spec.YearModel) || 0;
           if (!preco || preco < PRECO_MIN || preco > PRECO_MAX) return null;
           if (ano && ano < ANO_MIN) return null;
+
+          // Extrair estado REAL do vendedor (ex: "Santa Catarina (SC)" → "SC")
+          const sellerState = str(seller.State);
+          const stateMatch = sellerState.match(/\(([A-Z]{2})\)/);
+          const estadoReal = stateMatch ? stateMatch[1] : estado;
+
+          // Filtrar só SC/PR/RS
+          if (!REGIOES.includes(estadoReal)) return null;
+
           return {
             fonte:'Webmotors', titulo:(str(spec.Make)+' '+str(spec.Model)+' '+str(spec.Version)).trim(),
             marca:str(spec.Make), modelo:str(spec.Model), ano, preco,
             km:spec.Odometer ? Math.round(spec.Odometer)+' km' : '',
-            cidade:str(seller.City), estado,
+            cidade:str(seller.City), estado:estadoReal,
             link:item.UniqueId ? 'https://www.webmotors.com.br/comprar/'+item.UniqueId : '',
             particular:seller.SellerType==='PF', dataAnuncio:'', imagem:item.PhotoPath||'',
             cor:str(spec.Color&&spec.Color.Primary?spec.Color.Primary:spec.Color),
