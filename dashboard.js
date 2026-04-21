@@ -237,6 +237,38 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
   </div>`}
 
   <script>
+    // ============================================================
+    // CONFIGURAÇÃO DO SCRAPER CLIENT-SIDE
+    // ============================================================
+    const MODELOS = [
+      {m:'Gol',mk:'VW',s:'volkswagen',p:1},{m:'Onix',mk:'Chevrolet',s:'chevrolet',p:1},
+      {m:'Palio',mk:'Fiat',s:'fiat',p:1},{m:'HB20',mk:'Hyundai',s:'hyundai',p:1},
+      {m:'Polo',mk:'VW',s:'volkswagen',p:1},{m:'Sandero',mk:'Renault',s:'renault',p:1},
+      {m:'Classic',mk:'Chevrolet',s:'chevrolet',p:1},{m:'Saveiro',mk:'VW',s:'volkswagen',p:1},
+      {m:'Argo',mk:'Fiat',s:'fiat',p:2},{m:'Cronos',mk:'Fiat',s:'fiat',p:2},
+      {m:'Etios',mk:'Toyota',s:'toyota',p:2},{m:'Yaris',mk:'Toyota',s:'toyota',p:2},
+      {m:'Versa',mk:'Nissan',s:'nissan',p:2},{m:'Ka',mk:'Ford',s:'ford',p:2},
+      {m:'Mobi',mk:'Fiat',s:'fiat',p:2},{m:'Kwid',mk:'Renault',s:'renault',p:2},
+      {m:'Celta',mk:'Chevrolet',s:'chevrolet',p:2},{m:'Prisma',mk:'Chevrolet',s:'chevrolet',p:2},
+      {m:'Corsa',mk:'Chevrolet',s:'chevrolet',p:2},{m:'Uno',mk:'Fiat',s:'fiat',p:2},
+      {m:'Fox',mk:'VW',s:'volkswagen',p:2},{m:'Voyage',mk:'VW',s:'volkswagen',p:2},
+      {m:'Fiesta',mk:'Ford',s:'ford',p:2},
+      {m:'Toro',mk:'Fiat',s:'fiat',p:3},{m:'Tucson',mk:'Hyundai',s:'hyundai',p:3},
+      {m:'HR-V',mk:'Honda',s:'honda',p:3},{m:'Tracker',mk:'Chevrolet',s:'chevrolet',p:3},
+      {m:'Renegade',mk:'Jeep',s:'jeep',p:3},{m:'T-Cross',mk:'VW',s:'volkswagen',p:3},
+      {m:'Compass',mk:'Jeep',s:'jeep',p:3},{m:'Kicks',mk:'Nissan',s:'nissan',p:3},
+      {m:'Creta',mk:'Hyundai',s:'hyundai',p:3},{m:'Sorento',mk:'Kia',s:'kia',p:3},
+    ];
+    const ESTADOS_WM = {SC:'santa-catarina',PR:'parana',RS:'rio-grande-do-sul'};
+    const ESTADOS_ML = {SC:'TUxCUFNBTk8',PR:'TUxCUFBBUk4',RS:'TUxCUFJJT0c'};
+    const REGIOES = ['SC','PR','RS'];
+    const PRECO_MIN = 5000, PRECO_MAX = 100000, ANO_MIN = 2012;
+
+    let _garimpoAbortado = false;
+
+    // ============================================================
+    // UTILITÁRIOS
+    // ============================================================
     function toggleDetalhes(i) {
       const el = document.getElementById('det-' + i);
       el.style.display = el.style.display === 'none' ? '' : 'none';
@@ -246,16 +278,13 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
       const fonte = document.getElementById('filtroFonte').value.toLowerCase();
       const estado = document.getElementById('filtroEstado').value.toLowerCase();
       const busca = document.getElementById('busca').value.toLowerCase();
-
       document.querySelectorAll('.row').forEach((row, i) => {
         const texto = row.innerText.toLowerCase();
         const detRow = document.getElementById('det-' + i);
-
         let show = true;
         if (fonte && !texto.includes(fonte)) show = false;
         if (estado && !texto.includes(estado)) show = false;
         if (busca && !texto.includes(busca)) show = false;
-
         row.style.display = show ? '' : 'none';
         if (detRow) detRow.style.display = 'none';
       });
@@ -267,93 +296,234 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
       el.className = 'status-msg' + (isError ? ' error' : '');
     }
 
-    function setBtnLoading(btnId, loading, originalText) {
+    function setBtnLoading(btnId, loading, text) {
       const btn = document.getElementById(btnId);
       if (loading) {
         btn._origText = btn.innerHTML;
-        btn.innerHTML = '<span class="spinner"></span>' + (originalText || 'Aguarde...');
+        btn.innerHTML = '<span class="spinner"></span>' + (text || 'Aguarde...');
         btn.classList.add('btn-loading');
       } else {
-        btn.innerHTML = btn._origText || originalText;
+        btn.innerHTML = btn._origText || text;
         btn.classList.remove('btn-loading');
       }
     }
 
+    function str(campo) {
+      if (!campo) return '';
+      if (typeof campo === 'string') return campo;
+      if (typeof campo === 'object') return campo.Name || campo.Value || campo.name || campo.value || String(campo);
+      return String(campo);
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    // ============================================================
+    // FETCH COM CORS PROXY FALLBACK
+    // ============================================================
+    async function fetchJSON(url) {
+      // Tenta direto primeiro (funciona se API tem CORS headers)
+      try {
+        const r = await fetch(url, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(12000)});
+        if (r.ok) return await r.json();
+      } catch(e) {}
+
+      // Fallback: CORS proxy
+      const proxies = [
+        'https://corsproxy.io/?url=',
+        'https://api.allorigins.win/raw?url=',
+      ];
+      for (const proxy of proxies) {
+        try {
+          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(15000)});
+          if (r.ok) {
+            const text = await r.text();
+            return JSON.parse(text);
+          }
+        } catch(e) {}
+      }
+      return null;
+    }
+
+    // ============================================================
+    // WEBMOTORS SCRAPER
+    // ============================================================
+    async function buscarWM(modelo, marcaSlug, estado) {
+      const estadoSlug = ESTADOS_WM[estado];
+      const modeloSlug = modelo.toLowerCase().replace(/[-\\s]+/g, '-');
+      const wmUrl = 'https://www.webmotors.com.br/api/search/car?url=' +
+        encodeURIComponent('https://www.webmotors.com.br/carros/estoque/' + marcaSlug + '/' + modeloSlug + '/' + estadoSlug) +
+        '&DisplayPerPage=50&DisplayPage=1';
+
+      const data = await fetchJSON(wmUrl);
+      if (!data || !data.SearchResults) return [];
+
+      return data.SearchResults
+        .filter(item => {
+          const spec = item.Specification || item;
+          const mr = str(spec.Model).toLowerCase();
+          return mr.includes(modeloSlug.replace(/-/g,' ')) || modeloSlug.replace(/-/g,' ').includes(mr);
+        })
+        .map(item => {
+          const spec = item.Specification || item;
+          const seller = item.Seller || {};
+          const prices = item.Prices || {};
+          const preco = prices.Price || prices.SearchPrice || 0;
+          const ano = parseInt(spec.YearFabrication || spec.YearModel) || 0;
+          if (!preco || preco < PRECO_MIN || preco > PRECO_MAX) return null;
+          if (ano && ano < ANO_MIN) return null;
+          return {
+            fonte:'Webmotors', titulo:(str(spec.Make)+' '+str(spec.Model)+' '+str(spec.Version)).trim(),
+            marca:str(spec.Make), modelo:str(spec.Model), ano, preco,
+            km:spec.Odometer ? Math.round(spec.Odometer)+' km' : '',
+            cidade:str(seller.City), estado,
+            link:item.UniqueId ? 'https://www.webmotors.com.br/comprar/'+item.UniqueId : '',
+            particular:seller.SellerType==='PF', dataAnuncio:'', imagem:item.PhotoPath||'',
+            cor:str(spec.Color&&spec.Color.Primary?spec.Color.Primary:spec.Color),
+            combustivel:str(spec.Fuel), cambio:str(spec.Transmission),
+          };
+        })
+        .filter(Boolean);
+    }
+
+    // ============================================================
+    // MERCADO LIVRE SCRAPER
+    // ============================================================
+    async function buscarML(modelo, marca, estado) {
+      const estadoId = ESTADOS_ML[estado];
+      const query = marca + ' ' + modelo;
+      const mlUrl = 'https://api.mercadolibre.com/sites/MLB/search?q=' + encodeURIComponent(query) +
+        '&category=MLB1744&state=' + estadoId +
+        '&price=' + PRECO_MIN + '-' + PRECO_MAX +
+        '&ITEM_CONDITION=2230581&sort=price_asc&limit=50';
+
+      const data = await fetchJSON(mlUrl);
+      if (!data || !data.results) return [];
+
+      return data.results
+        .filter(item => {
+          const ya = item.attributes?.find(a => a.id === 'VEHICLE_YEAR');
+          const ano = parseInt(ya?.value_name);
+          return !ano || ano >= ANO_MIN;
+        })
+        .map(item => {
+          const ya = item.attributes?.find(a => a.id === 'VEHICLE_YEAR');
+          const ka = item.attributes?.find(a => a.id === 'KILOMETERS');
+          return {
+            fonte:'MercadoLivre', titulo:item.title||'',
+            marca, modelo,
+            ano:parseInt(ya?.value_name)||0, preco:item.price||0,
+            km:ka?.value_name||'',
+            cidade:item.seller_address?.city?.name||'',
+            estado:item.seller_address?.state?.id?.slice(-2)||estado,
+            link:item.permalink||'', particular:true,
+            dataAnuncio:'', imagem:item.thumbnail||'',
+            cor:'', combustivel:'', cambio:'',
+          };
+        })
+        .filter(a => a.preco >= PRECO_MIN && a.preco <= PRECO_MAX);
+    }
+
+    // ============================================================
+    // GARIMPO PRINCIPAL (RODA NO BROWSER)
+    // ============================================================
     async function garimparAgora() {
+      _garimpoAbortado = false;
       setBtnLoading('btnGarimpar', true, 'Garimpando...');
-      setStatus('Iniciando garimpo...', false);
+      setStatus('Iniciando garimpo no browser...', false);
+
+      const todosAnuncios = [];
+      const fontesUsadas = new Set();
+      let processados = 0;
+      const total = MODELOS.length;
+      const inicio = Date.now();
 
       try {
-        const resp = await fetch('/garimpar');
-        const data = await resp.json();
+        // Processar 3 modelos em paralelo
+        for (let i = 0; i < MODELOS.length; i += 3) {
+          if (_garimpoAbortado) break;
 
-        if (data.status === 'already_running') {
-          setStatus('Garimpo já está rodando, aguarde...', false);
-        } else {
-          setStatus('Garimpo iniciado! Buscando em todas as fontes...', false);
+          const batch = MODELOS.slice(i, i + 3);
+          const promises = batch.map(async (mod) => {
+            for (const estado of REGIOES) {
+              if (_garimpoAbortado) return;
+
+              // Webmotors
+              try {
+                const wm = await buscarWM(mod.m, mod.s, estado);
+                if (wm.length > 0) { todosAnuncios.push(...wm); fontesUsadas.add('Webmotors'); }
+              } catch(e) {}
+
+              // Mercado Livre
+              try {
+                const ml = await buscarML(mod.m, mod.mk, estado);
+                if (ml.length > 0) { todosAnuncios.push(...ml); fontesUsadas.add('MercadoLivre'); }
+              } catch(e) {}
+
+              await sleep(500);
+            }
+            processados++;
+          });
+
+          await Promise.all(promises);
+
+          const elapsed = Math.round((Date.now() - inicio) / 1000);
+          const done = Math.min(i + 3, total);
+          setStatus('Garimpando... ' + done + '/' + total + ' modelos | ' + todosAnuncios.length + ' anúncios (' + elapsed + 's)', false);
         }
 
-        // Poll a cada 10s até completar
-        let tentativas = 0;
-        const maxTentativas = 60; // 10 min max
-        const poll = setInterval(async () => {
-          tentativas++;
-          try {
-            const st = await fetch('/api/garimpo-status');
-            const status = await st.json();
+        if (todosAnuncios.length === 0) {
+          setStatus('Nenhum anúncio coletado. APIs podem estar bloqueadas.', true);
+          setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
+          return;
+        }
 
-            if (!status.rodando) {
-              clearInterval(poll);
-              setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
-              if (status.oportunidades > 0) {
-                setStatus('Pronto! ' + status.oportunidades + ' oportunidades. Atualizando...', false);
-              } else if (status.totalAnalisados > 0) {
-                setStatus('Pronto! ' + status.totalAnalisados + ' analisados, 0 com margem suficiente.', false);
-              } else {
-                setStatus('Concluído. Nenhum resultado (fontes podem estar bloqueadas).', true);
-              }
-              // Recarrega a página pra mostrar resultados
-              setTimeout(() => { window.location.reload(); }, 1500);
-            } else {
-              const mins = Math.floor(tentativas * 10 / 60);
-              const secs = (tentativas * 10) % 60;
-              setStatus('Garimpando... (' + mins + 'm' + secs + 's)', false);
-            }
-          } catch (e) {
-            // Ignora erros de polling
-          }
+        // Enviar pro servidor pra calcular margem FIPE
+        setStatus('Calculando margens no servidor (' + todosAnuncios.length + ' anúncios)...', false);
 
-          if (tentativas >= maxTentativas) {
-            clearInterval(poll);
-            setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
-            setStatus('Timeout. Verifique o dashboard em alguns minutos.', true);
-          }
-        }, 10000);
+        const resp = await fetch('/api/import-raw', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            anuncios: todosAnuncios,
+            fontes: [...fontesUsadas],
+          }),
+        });
+
+        const result = await resp.json();
+
+        if (result.ok) {
+          const elapsed = Math.round((Date.now() - inicio) / 1000);
+          setStatus('Pronto! ' + result.totalAnalisados + ' analisados, ' + result.oportunidades + ' oportunidades (' + elapsed + 's)', false);
+          setTimeout(() => { window.location.reload(); }, 2000);
+        } else {
+          setStatus('Erro no servidor: ' + (result.error || 'desconhecido'), true);
+          setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
+        }
 
       } catch (err) {
-        setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
         setStatus('Erro: ' + err.message, true);
+        setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
       }
     }
 
+    // ============================================================
+    // ATUALIZAR (recarrega dados do servidor sem garimpar)
+    // ============================================================
     async function atualizarDados() {
       setBtnLoading('btnAtualizar', true, 'Atualizando...');
       setStatus('Carregando dados...', false);
-
       try {
         const resp = await fetch('/api/resultado');
         const data = await resp.json();
-
         if (data.error) {
           setStatus('Nenhum resultado para hoje.', true);
         } else {
-          setStatus('Dados atualizados! ' + (data.oportunidades?.length || 0) + ' oportunidades.', false);
+          setStatus('Atualizado! ' + (data.oportunidades?.length || 0) + ' oportunidades.', false);
           setTimeout(() => { window.location.reload(); }, 500);
         }
       } catch (err) {
-        setStatus('Erro ao atualizar: ' + err.message, true);
+        setStatus('Erro: ' + err.message, true);
       }
-
       setBtnLoading('btnAtualizar', false, '📊 Atualizar');
     }
   </script>

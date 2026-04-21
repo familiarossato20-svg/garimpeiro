@@ -115,6 +115,71 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Import RAW — recebe anúncios brutos do browser, calcula margem FIPE server-side
+  if (url.pathname === '/api/import-raw' && req.method === 'POST') {
+    // CORS headers pra aceitar POST do browser
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { anuncios, fontes } = JSON.parse(body);
+        console.log(`[IMPORT-RAW] Recebido ${anuncios.length} anúncios brutos do browser (fontes: ${fontes.join(', ')})`);
+
+        const { calcularMargem, removerDuplicatas } = require('./margem');
+        const { limparCache } = require('./fipe');
+
+        limparCache();
+        const unicos = removerDuplicatas(anuncios);
+        console.log(`[IMPORT-RAW] Após dedup: ${unicos.length}`);
+
+        const oportunidades = await calcularMargem(unicos);
+        console.log(`[IMPORT-RAW] Oportunidades com margem: ${oportunidades.length}`);
+
+        const resultado = {
+          data: new Date().toISOString(),
+          totalAnalisados: anuncios.length,
+          oportunidades: oportunidades.slice(0, 50),
+          stats: { totalAnalisados: anuncios.length, fontes },
+          fonte: 'browser-scraper',
+        };
+
+        const dataStr = new Date().toISOString().split('T')[0];
+        const arquivo = `./resultados/garimpo-${dataStr}.json`;
+        if (!fs.existsSync('./resultados')) fs.mkdirSync('./resultados');
+        fs.writeFileSync(arquivo, JSON.stringify(resultado, null, 2));
+
+        console.log(`[IMPORT-RAW] Salvo: ${arquivo}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: true,
+          totalAnalisados: anuncios.length,
+          oportunidades: oportunidades.length,
+          saved: arquivo,
+        }));
+      } catch (err) {
+        console.error('[IMPORT-RAW] Erro:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // CORS preflight pra import-raw
+  if (url.pathname === '/api/import-raw' && req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
   // Health
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
