@@ -1,10 +1,7 @@
 const config = require('./config');
 const { consultarPrecoFipe, statusAPIs } = require('./fipe');
 
-// Contador de falhas FIPE pra decidir se entra em modo fallback
-let fipeFalhas = 0;
-let fipeConsultas = 0;
-const FIPE_FALHA_THRESHOLD = 0.8; // Se 80%+ falhar, entra em modo sem FIPE
+const FIPE_FALHA_THRESHOLD = 0.8;
 
 /**
  * Calcula margem e score de cada oportunidade
@@ -17,72 +14,80 @@ async function calcularMargem(anuncios) {
   const comMargem = [];
   const semMargem = [];
 
-  fipeFalhas = 0;
-  fipeConsultas = 0;
+  // AGRUPAR por marca+modelo+ano — consulta FIPE 1x por grupo, não 1x por anúncio
+  const grupos = {};
+  for (const a of anuncios) {
+    const key = `${(a.marca||'').toLowerCase()}_${(a.modelo||'').toLowerCase()}_${a.ano}`;
+    if (!grupos[key]) grupos[key] = { marca: a.marca, modelo: a.modelo, ano: a.ano, titulo: a.titulo, anuncios: [] };
+    grupos[key].anuncios.push(a);
+  }
 
-  for (const anuncio of anuncios) {
-    try {
+  const grupoKeys = Object.keys(grupos);
+  console.log(`[MARGEM] ${anuncios.length} anúncios em ${grupoKeys.length} grupos marca+modelo+ano`);
+
+  // Processar grupos em batches de 5 em paralelo
+  const BATCH_SIZE = 5;
+  let fipeConsultas = 0;
+  let fipeFalhas = 0;
+
+  for (let i = 0; i < grupoKeys.length; i += BATCH_SIZE) {
+    const batch = grupoKeys.slice(i, i + BATCH_SIZE);
+
+    const results = await Promise.all(batch.map(async (key) => {
+      const grupo = grupos[key];
       fipeConsultas++;
 
-      // Consultar FIPE — passa titulo como hint de versão
-      const fipe = await consultarPrecoFipe(anuncio.marca, anuncio.modelo, anuncio.ano, anuncio.titulo);
+      try {
+        const fipe = await consultarPrecoFipe(grupo.marca, grupo.modelo, grupo.ano, grupo.titulo);
 
-      if (!fipe || !fipe.preco) {
+        if (!fipe || !fipe.preco) {
+          fipeFalhas++;
+          return { grupo, fipe: null };
+        }
+        return { grupo, fipe };
+      } catch (err) {
         fipeFalhas++;
-        // Guarda pra modo fallback
-        semMargem.push({
-          ...anuncio,
-          fipe: 0,
-          codigoFipe: '',
-          margemBruta: 0,
-          margemLiquida: 0,
-          percentualAbaixoFipe: 0,
-          score: 0,
-          prioridadeModelo: getPrioridade(anuncio),
-          semFipe: true,
+        return { grupo, fipe: null };
+      }
+    }));
+
+    // Aplicar resultado FIPE a todos os anúncios do grupo
+    for (const { grupo, fipe } of results) {
+      for (const anuncio of grupo.anuncios) {
+        if (!fipe) {
+          semMargem.push({
+            ...anuncio, fipe: 0, codigoFipe: '', margemBruta: 0, margemLiquida: 0,
+            percentualAbaixoFipe: 0, score: 0, prioridadeModelo: getPrioridade(anuncio), semFipe: true,
+          });
+          continue;
+        }
+
+        const margemBruta = fipe.preco - anuncio.preco;
+        const margemLiquida = margemBruta - config.filtros.custoPreparacao;
+        const percentualAbaixoFipe = ((fipe.preco - anuncio.preco) / fipe.preco) * 100;
+
+        if (margemLiquida < config.filtros.margemMinima) continue;
+
+        const prioridadeNum = getPrioridade(anuncio);
+        const prioridadeBonus = prioridadeNum > 0 ? (4 - prioridadeNum) * 10 : 0;
+        const score = Math.round(
+          (margemLiquida / 1000) * 3 + percentualAbaixoFipe * 2 + prioridadeBonus
+        );
+
+        comMargem.push({
+          ...anuncio, fipe: fipe.preco, codigoFipe: fipe.codigoFipe,
+          margemBruta, margemLiquida,
+          percentualAbaixoFipe: Math.round(percentualAbaixoFipe * 10) / 10,
+          score, prioridadeModelo: prioridadeNum, semFipe: false,
         });
-        continue;
       }
-
-      // Calcular margem
-      const margemBruta = fipe.preco - anuncio.preco;
-      const margemLiquida = margemBruta - config.filtros.custoPreparacao;
-      const percentualAbaixoFipe = ((fipe.preco - anuncio.preco) / fipe.preco) * 100;
-
-      // Se margem negativa ou abaixo do mínimo, descarta
-      if (margemLiquida < config.filtros.margemMinima) {
-        continue;
-      }
-
-      // Calcular score composto
-      const prioridadeNum = getPrioridade(anuncio);
-      const prioridadeBonus = prioridadeNum > 0 ? (4 - prioridadeNum) * 10 : 0;
-
-      const score = Math.round(
-        (margemLiquida / 1000) * 3 +     // R$10k margem = 30 pontos
-        percentualAbaixoFipe * 2 +         // 20% abaixo = 40 pontos
-        prioridadeBonus                    // modelo popular = +30 pontos
-      );
-
-      comMargem.push({
-        ...anuncio,
-        fipe: fipe.preco,
-        codigoFipe: fipe.codigoFipe,
-        margemBruta,
-        margemLiquida,
-        percentualAbaixoFipe: Math.round(percentualAbaixoFipe * 10) / 10,
-        score,
-        prioridadeModelo: prioridadeNum,
-        semFipe: false,
-      });
-
-    } catch (err) {
-      console.error(`[MARGEM] Erro ${anuncio.titulo}: ${err.message}`);
-      fipeFalhas++;
     }
 
-    // Delay pra não sobrecarregar a API FIPE
-    await sleep(500);
+    // Log progresso
+    const done = Math.min(i + BATCH_SIZE, grupoKeys.length);
+    if (done % 10 === 0 || done === grupoKeys.length) {
+      console.log(`[MARGEM] FIPE: ${done}/${grupoKeys.length} grupos processados`);
+    }
   }
 
   // Decidir modo
