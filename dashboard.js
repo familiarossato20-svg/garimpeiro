@@ -318,24 +318,33 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
     // ============================================================
-    // FETCH COM CORS PROXY FALLBACK
+    // FETCH COM CORS PROXY ROTATIVO
     // ============================================================
+    let _proxyIdx = 0;
+    const PROXIES = [
+      'https://corsproxy.io/?url=',
+      'https://api.allorigins.win/raw?url=',
+      'https://api.codetabs.com/v1/proxy?quest=',
+    ];
+
     async function fetchJSON(url) {
+      // Tenta direto (funciona se API tem CORS)
       try {
-        const r = await fetch(url, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(8000)});
+        const r = await fetch(url, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(6000)});
         if (r.ok) return await r.json();
       } catch(e) {}
 
-      const proxies = [
-        'https://corsproxy.io/?url=',
-        'https://api.allorigins.win/raw?url=',
-      ];
-      for (const proxy of proxies) {
+      // Rotaciona entre proxies
+      for (let i = 0; i < PROXIES.length; i++) {
+        const proxy = PROXIES[(_proxyIdx + i) % PROXIES.length];
         try {
-          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(8000)});
+          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(10000)});
           if (r.ok) {
             const text = await r.text();
-            return JSON.parse(text);
+            if (text.includes('SearchResults') || text.includes('results')) {
+              _proxyIdx = (_proxyIdx + i) % PROXIES.length; // lembra qual funcionou
+              return JSON.parse(text);
+            }
           }
         } catch(e) {}
       }
@@ -343,11 +352,69 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     }
 
     // ============================================================
-    // WEBMOTORS SCRAPER
+    // WEBMOTORS — BUSCA POR ESTADO (1 chamada por estado, sem filtro de modelo)
     // ============================================================
+    async function buscarWMEstado(estado) {
+      const estadoSlug = ESTADOS_WM[estado];
+      const resultados = [];
+
+      // Busca SEM modelo — pega tudo na faixa de preço, filtra depois
+      const wmUrl = 'https://www.webmotors.com.br/api/search/car?url=' +
+        encodeURIComponent('https://www.webmotors.com.br/carros/estoque/' + estadoSlug) +
+        '&DisplayPerPage=50&DisplayPage=1';
+
+      const data = await fetchJSON(wmUrl);
+      if (!data || !data.SearchResults) return [];
+
+      // Nomes dos modelos que nos interessam (lowercase)
+      const modelosSet = new Set(MODELOS.map(m => m.m.toLowerCase()));
+
+      for (const item of data.SearchResults) {
+        const spec = item.Specification || item;
+        const seller = item.Seller || {};
+        const prices = item.Prices || {};
+        const modelName = str(spec.Model).toUpperCase();
+        const modelLower = modelName.toLowerCase();
+
+        // Filtrar só modelos que estão na nossa lista
+        const modeloMatch = MODELOS.find(m =>
+          modelLower.includes(m.m.toLowerCase()) || m.m.toLowerCase().includes(modelLower)
+        );
+        if (!modeloMatch) continue;
+
+        const preco = prices.Price || prices.SearchPrice || 0;
+        const ano = parseInt(spec.YearFabrication || spec.YearModel) || 0;
+        if (!preco || preco < PRECO_MIN || preco > PRECO_MAX) continue;
+        if (ano && ano < ANO_MIN) continue;
+
+        // Estado real do vendedor
+        const sellerState = str(seller.State);
+        const parenIdx = sellerState.indexOf('(');
+        const closeIdx = sellerState.indexOf(')');
+        const estadoReal = parenIdx > -1 ? sellerState.substring(parenIdx+1, closeIdx) : estado;
+        if (!REGIOES.includes(estadoReal)) continue;
+
+        resultados.push({
+          fonte:'Webmotors',
+          titulo:(str(spec.Make)+' '+str(spec.Model)+' '+str(spec.Version)).trim(),
+          marca:str(spec.Make), modelo:str(spec.Model), ano, preco,
+          km:spec.Odometer ? Math.round(spec.Odometer)+' km' : '',
+          cidade:str(seller.City), estado:estadoReal,
+          link:item.UniqueId ? 'https://www.webmotors.com.br/comprar/'+item.UniqueId : '',
+          particular:seller.SellerType==='PF',
+          dataAnuncio:'', imagem:item.PhotoPath||'',
+          cor:str(spec.Color&&spec.Color.Primary?spec.Color.Primary:spec.Color),
+          combustivel:str(spec.Fuel), cambio:str(spec.Transmission),
+        });
+      }
+
+      return resultados;
+    }
+
+    // Busca por marca+modelo específico (fallback se busca genérica não funcionar)
     async function buscarWM(modelo, marcaSlug, estado) {
       const estadoSlug = ESTADOS_WM[estado];
-      const modeloSlug = modelo.toLowerCase().replace(/[-\\s]+/g, '-');
+      const modeloSlug = modelo.toLowerCase().split(' ').join('-');
       const wmUrl = 'https://www.webmotors.com.br/api/search/car?url=' +
         encodeURIComponent('https://www.webmotors.com.br/carros/estoque/' + marcaSlug + '/' + modeloSlug + '/' + estadoSlug) +
         '&DisplayPerPage=50&DisplayPage=1';
@@ -359,7 +426,7 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
         .filter(item => {
           const spec = item.Specification || item;
           const mr = str(spec.Model).toLowerCase();
-          return mr.includes(modeloSlug.replace(/-/g,' ')) || modeloSlug.replace(/-/g,' ').includes(mr);
+          return mr.includes(modeloSlug) || modeloSlug.includes(mr);
         })
         .map(item => {
           const spec = item.Specification || item;
@@ -369,15 +436,11 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
           const ano = parseInt(spec.YearFabrication || spec.YearModel) || 0;
           if (!preco || preco < PRECO_MIN || preco > PRECO_MAX) return null;
           if (ano && ano < ANO_MIN) return null;
-
-          // Extrair estado REAL do vendedor (ex: "Santa Catarina (SC)" → "SC")
           const sellerState = str(seller.State);
-          const stateMatch = sellerState.match(/\(([A-Z]{2})\)/);
-          const estadoReal = stateMatch ? stateMatch[1] : estado;
-
-          // Filtrar só SC/PR/RS
+          const parenIdx = sellerState.indexOf('(');
+          const closeIdx = sellerState.indexOf(')');
+          const estadoReal = parenIdx > -1 ? sellerState.substring(parenIdx+1, closeIdx) : estado;
           if (!REGIOES.includes(estadoReal)) return null;
-
           return {
             fonte:'Webmotors', titulo:(str(spec.Make)+' '+str(spec.Model)+' '+str(spec.Version)).trim(),
             marca:str(spec.Make), modelo:str(spec.Model), ano, preco,
@@ -496,51 +559,71 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     async function garimparAgora() {
       _garimpoAbortado = false;
       setBtnLoading('btnGarimpar', true, 'Garimpando...');
-      setStatus('Iniciando garimpo...', false);
+      setStatus('Buscando veículos SC + PR + RS...', false);
 
       const todosAnuncios = [];
       const fontesUsadas = new Set();
-      const total = MODELOS.length;
       const inicio = Date.now();
 
       try {
-        // Processar 6 modelos em paralelo, todos estados + fontes em paralelo
-        for (let i = 0; i < MODELOS.length; i += 6) {
-          if (_garimpoAbortado) break;
+        // ========== FASE 1: WM bulk (3 chamadas, 1 por estado) ==========
+        setStatus('Buscando Webmotors SC + PR + RS...', false);
+        const wmResults = await Promise.all(
+          REGIOES.map(estado => buscarWMEstado(estado).catch(() => []))
+        );
+        for (const r of wmResults) {
+          if (r.length > 0) { todosAnuncios.push(...r); fontesUsadas.add('Webmotors'); }
+        }
 
-          const batch = MODELOS.slice(i, i + 6);
-          await Promise.all(batch.map(async (mod) => {
-            // Todos estados + fontes em paralelo (ML falha silencioso se bloqueado)
-            const calls = [];
-            for (const estado of REGIOES) {
-              calls.push(buscarWM(mod.m, mod.s, estado).catch(() => []));
-              calls.push(buscarML(mod.m, mod.mk, estado).catch(() => []));
-            }
-            const results = await Promise.all(calls);
-            for (const r of results) {
-              if (r.length > 0) {
-                todosAnuncios.push(...r);
-                fontesUsadas.add(r[0].fonte);
+        let elapsed = Math.round((Date.now() - inicio) / 1000);
+        setStatus('Webmotors: ' + todosAnuncios.length + ' anúncios (' + elapsed + 's). Tentando Mercado Livre...', false);
+
+        // ========== FASE 2: ML (3 chamadas por modelo prioritário - top 8 apenas) ==========
+        const topModelos = MODELOS.filter(m => m.p === 1); // só prioridade 1
+        const mlCalls = [];
+        for (const mod of topModelos) {
+          for (const estado of REGIOES) {
+            mlCalls.push(buscarML(mod.m, mod.mk, estado).catch(() => []));
+          }
+        }
+        const mlResults = await Promise.all(mlCalls);
+        for (const r of mlResults) {
+          if (r.length > 0) { todosAnuncios.push(...r); fontesUsadas.add('MercadoLivre'); }
+        }
+
+        elapsed = Math.round((Date.now() - inicio) / 1000);
+
+        // ========== FASE 3: Se WM bulk não trouxe nada, tenta per-model ==========
+        if (!fontesUsadas.has('Webmotors') && todosAnuncios.length === 0) {
+          setStatus('Bulk falhou. Buscando modelo por modelo...', false);
+          for (let i = 0; i < MODELOS.length; i += 6) {
+            if (_garimpoAbortado) break;
+            const batch = MODELOS.slice(i, i + 6);
+            await Promise.all(batch.map(async (mod) => {
+              const calls = REGIOES.map(estado =>
+                buscarWM(mod.m, mod.s, estado).catch(() => [])
+              );
+              const results = await Promise.all(calls);
+              for (const r of results) {
+                if (r.length > 0) { todosAnuncios.push(...r); fontesUsadas.add('Webmotors'); }
               }
-            }
-          }));
-
-          const elapsed = Math.round((Date.now() - inicio) / 1000);
-          const done = Math.min(i + 6, total);
-          setStatus('Garimpando... ' + done + '/' + total + ' modelos | ' + todosAnuncios.length + ' anúncios (' + elapsed + 's)', false);
-
-          // Micro delay entre batches pra não travar o browser
-          await sleep(100);
+            }));
+            const done = Math.min(i + 6, MODELOS.length);
+            elapsed = Math.round((Date.now() - inicio) / 1000);
+            setStatus('Modelo ' + done + '/' + MODELOS.length + ' | ' + todosAnuncios.length + ' anúncios (' + elapsed + 's)', false);
+            await sleep(100);
+          }
         }
 
         if (todosAnuncios.length === 0) {
-          setStatus('Nenhum anúncio coletado. APIs podem estar bloqueadas.', true);
+          setStatus('Nenhum anúncio coletado. Proxy pode estar limitado — tente novamente em alguns minutos.', true);
           setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
           return;
         }
 
-        // Enviar pro servidor pra calcular margem FIPE
-        setStatus('Calculando margens no servidor (' + todosAnuncios.length + ' anúncios)...', false);
+        // ========== FASE 4: Enviar pro servidor (FIPE + margem) ==========
+        elapsed = Math.round((Date.now() - inicio) / 1000);
+        setStatus('Calculando margens FIPE (' + todosAnuncios.length + ' anúncios, ' + elapsed + 's)...', false);
 
         const resp = await fetch('/api/import-raw', {
           method: 'POST',
@@ -552,13 +635,13 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
         });
 
         const result = await resp.json();
+        elapsed = Math.round((Date.now() - inicio) / 1000);
 
         if (result.ok) {
-          const elapsed = Math.round((Date.now() - inicio) / 1000);
           setStatus('Pronto! ' + result.totalAnalisados + ' analisados, ' + result.oportunidades + ' oportunidades (' + elapsed + 's)', false);
           setTimeout(() => { window.location.reload(); }, 2000);
         } else {
-          setStatus('Erro no servidor: ' + (result.error || 'desconhecido'), true);
+          setStatus('Erro: ' + (result.error || 'desconhecido'), true);
           setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
         }
 
