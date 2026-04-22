@@ -393,41 +393,87 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     }
 
     // ============================================================
-    // MERCADO LIVRE SCRAPER
+    // MERCADO LIVRE SCRAPER (HTML + API fallback)
     // ============================================================
     async function buscarML(modelo, marca, estado) {
       const estadoId = ESTADOS_ML[estado];
-      const query = marca + ' ' + modelo;
-      const mlUrl = 'https://api.mercadolibre.com/sites/MLB/search?q=' + encodeURIComponent(query) +
-        '&category=MLB1744&state=' + estadoId +
-        '&price=' + PRECO_MIN + '-' + PRECO_MAX +
-        '&ITEM_CONDITION=2230581&sort=price_asc&limit=50';
+      const marcaSlug = marca.toLowerCase().replace(/\s+/g, '-');
+      const modeloSlug = modelo.toLowerCase().replace(/\s+/g, '-');
 
-      const data = await fetchJSON(mlUrl);
-      if (!data || !data.results) return [];
+      // Estratégia 1: Fetch HTML da página de busca via CORS proxy
+      try {
+        const mlPageUrl = 'https://veiculos.mercadolivre.com.br/' + marcaSlug + '-' + modeloSlug +
+          '_PriceRange_' + PRECO_MIN + 'BRL-' + PRECO_MAX + 'BRL_ITEM*CONDITION_2230581_state_' + estadoId;
 
-      return data.results
+        const proxies = ['https://corsproxy.io/?url=', 'https://api.allorigins.win/raw?url='];
+        for (const proxy of proxies) {
+          try {
+            const r = await fetch(proxy + encodeURIComponent(mlPageUrl), {signal: AbortSignal.timeout(8000)});
+            if (!r.ok) continue;
+            const html = await r.text();
+
+            // Extrair __NEXT_DATA__ JSON
+            const match = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+            if (match) {
+              const nextData = JSON.parse(match[1]);
+              const results = nextData?.props?.pageProps?.initialState?.results ||
+                nextData?.props?.pageProps?.results || [];
+              if (results.length > 0) return parseMLResults(results, marca, modelo, estado);
+            }
+
+            // Fallback: buscar JSON no body
+            const jsonMatch = html.match(/"results"\s*:\s*(\[[\s\S]*?\])\s*,\s*"(?:filters|sort|available)/);
+            if (jsonMatch) {
+              const results = JSON.parse(jsonMatch[1]);
+              if (results.length > 0) return parseMLResults(results, marca, modelo, estado);
+            }
+          } catch(e) {}
+        }
+      } catch(e) {}
+
+      // Estratégia 2: API direta (geralmente 403 mas tenta)
+      try {
+        const apiUrl = 'https://api.mercadolibre.com/sites/MLB/search?q=' + encodeURIComponent(marca + ' ' + modelo) +
+          '&category=MLB1744&state=' + estadoId + '&price=' + PRECO_MIN + '-' + PRECO_MAX +
+          '&ITEM_CONDITION=2230581&sort=price_asc&limit=50';
+        const data = await fetchJSON(apiUrl);
+        if (data && data.results && data.results.length > 0) return parseMLResults(data.results, marca, modelo, estado);
+      } catch(e) {}
+
+      return [];
+    }
+
+    function parseMLResults(results, marca, modelo, estado) {
+      return results
         .filter(item => {
           const ya = item.attributes?.find(a => a.id === 'VEHICLE_YEAR');
-          const ano = parseInt(ya?.value_name);
+          const ano = parseInt(ya?.value_name || item.year || 0);
           return !ano || ano >= ANO_MIN;
         })
         .map(item => {
           const ya = item.attributes?.find(a => a.id === 'VEHICLE_YEAR');
           const ka = item.attributes?.find(a => a.id === 'KILOMETERS');
+          const preco = item.price || parseInt(String(item.price_amount || '0').replace(/\D/g, '')) || 0;
+          if (preco < PRECO_MIN || preco > PRECO_MAX) return null;
+
+          // Estado real do anúncio
+          const sellerState = item.seller_address?.state?.id?.slice(-2) ||
+            item.address?.state_id?.slice(-2) || estado;
+          if (!REGIOES.includes(sellerState)) return null;
+
           return {
             fonte:'MercadoLivre', titulo:item.title||'',
             marca, modelo,
-            ano:parseInt(ya?.value_name)||0, preco:item.price||0,
+            ano:parseInt(ya?.value_name || item.year)||0, preco,
             km:ka?.value_name||'',
-            cidade:item.seller_address?.city?.name||'',
-            estado:item.seller_address?.state?.id?.slice(-2)||estado,
+            cidade:item.seller_address?.city?.name || item.address?.city_name || '',
+            estado:sellerState,
             link:item.permalink||'', particular:true,
             dataAnuncio:'', imagem:item.thumbnail||'',
             cor:'', combustivel:'', cambio:'',
           };
         })
-        .filter(a => a.preco >= PRECO_MIN && a.preco <= PRECO_MAX);
+        .filter(Boolean);
     }
 
     // ============================================================
@@ -450,15 +496,17 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
 
           const batch = MODELOS.slice(i, i + 6);
           await Promise.all(batch.map(async (mod) => {
-            // Todos estados em paralelo pra cada modelo (só WM — ML é 403 do browser)
-            const calls = REGIOES.map(estado =>
-              buscarWM(mod.m, mod.s, estado).catch(() => [])
-            );
+            // Todos estados + fontes em paralelo (ML falha silencioso se bloqueado)
+            const calls = [];
+            for (const estado of REGIOES) {
+              calls.push(buscarWM(mod.m, mod.s, estado).catch(() => []));
+              calls.push(buscarML(mod.m, mod.mk, estado).catch(() => []));
+            }
             const results = await Promise.all(calls);
             for (const r of results) {
               if (r.length > 0) {
                 todosAnuncios.push(...r);
-                fontesUsadas.add('Webmotors');
+                fontesUsadas.add(r[0].fonte);
               }
             }
           }));
