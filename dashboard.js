@@ -321,20 +321,18 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     // FETCH COM CORS PROXY FALLBACK
     // ============================================================
     async function fetchJSON(url) {
-      // Tenta direto primeiro (funciona se API tem CORS headers)
       try {
-        const r = await fetch(url, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(12000)});
+        const r = await fetch(url, {headers:{'Accept':'application/json'}, signal: AbortSignal.timeout(8000)});
         if (r.ok) return await r.json();
       } catch(e) {}
 
-      // Fallback: CORS proxy
       const proxies = [
         'https://corsproxy.io/?url=',
         'https://api.allorigins.win/raw?url=',
       ];
       for (const proxy of proxies) {
         try {
-          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(15000)});
+          const r = await fetch(proxy + encodeURIComponent(url), {signal: AbortSignal.timeout(8000)});
           if (r.ok) {
             const text = await r.text();
             return JSON.parse(text);
@@ -438,46 +436,39 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     async function garimparAgora() {
       _garimpoAbortado = false;
       setBtnLoading('btnGarimpar', true, 'Garimpando...');
-      setStatus('Iniciando garimpo no browser...', false);
+      setStatus('Iniciando garimpo...', false);
 
       const todosAnuncios = [];
       const fontesUsadas = new Set();
-      let processados = 0;
       const total = MODELOS.length;
       const inicio = Date.now();
 
       try {
-        // Processar 3 modelos em paralelo
-        for (let i = 0; i < MODELOS.length; i += 3) {
+        // Processar 6 modelos em paralelo, todos estados + fontes em paralelo
+        for (let i = 0; i < MODELOS.length; i += 6) {
           if (_garimpoAbortado) break;
 
-          const batch = MODELOS.slice(i, i + 3);
-          const promises = batch.map(async (mod) => {
-            for (const estado of REGIOES) {
-              if (_garimpoAbortado) return;
-
-              // Webmotors
-              try {
-                const wm = await buscarWM(mod.m, mod.s, estado);
-                if (wm.length > 0) { todosAnuncios.push(...wm); fontesUsadas.add('Webmotors'); }
-              } catch(e) {}
-
-              // Mercado Livre
-              try {
-                const ml = await buscarML(mod.m, mod.mk, estado);
-                if (ml.length > 0) { todosAnuncios.push(...ml); fontesUsadas.add('MercadoLivre'); }
-              } catch(e) {}
-
-              await sleep(500);
+          const batch = MODELOS.slice(i, i + 6);
+          await Promise.all(batch.map(async (mod) => {
+            // Todos estados em paralelo pra cada modelo (só WM — ML é 403 do browser)
+            const calls = REGIOES.map(estado =>
+              buscarWM(mod.m, mod.s, estado).catch(() => [])
+            );
+            const results = await Promise.all(calls);
+            for (const r of results) {
+              if (r.length > 0) {
+                todosAnuncios.push(...r);
+                fontesUsadas.add('Webmotors');
+              }
             }
-            processados++;
-          });
-
-          await Promise.all(promises);
+          }));
 
           const elapsed = Math.round((Date.now() - inicio) / 1000);
-          const done = Math.min(i + 3, total);
+          const done = Math.min(i + 6, total);
           setStatus('Garimpando... ' + done + '/' + total + ' modelos | ' + todosAnuncios.length + ' anúncios (' + elapsed + 's)', false);
+
+          // Micro delay entre batches pra não travar o browser
+          await sleep(100);
         }
 
         if (todosAnuncios.length === 0) {
