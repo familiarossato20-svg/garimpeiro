@@ -397,8 +397,8 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     // ============================================================
     async function buscarML(modelo, marca, estado) {
       const estadoId = ESTADOS_ML[estado];
-      const marcaSlug = marca.toLowerCase().replace(/\s+/g, '-');
-      const modeloSlug = modelo.toLowerCase().replace(/\s+/g, '-');
+      const marcaSlug = marca.toLowerCase().split(' ').join('-');
+      const modeloSlug = modelo.toLowerCase().split(' ').join('-');
 
       // Estratégia 1: Fetch HTML da página de busca via CORS proxy
       try {
@@ -412,20 +412,34 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
             if (!r.ok) continue;
             const html = await r.text();
 
-            // Extrair __NEXT_DATA__ JSON
-            const match = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-            if (match) {
-              const nextData = JSON.parse(match[1]);
-              const results = nextData?.props?.pageProps?.initialState?.results ||
-                nextData?.props?.pageProps?.results || [];
-              if (results.length > 0) return parseMLResults(results, marca, modelo, estado);
+            // Extrair __NEXT_DATA__ JSON via indexOf (sem regex)
+            const ndIdx = html.indexOf('id="__NEXT_DATA__"');
+            if (ndIdx > -1) {
+              const jsonStart = html.indexOf('>', ndIdx) + 1;
+              const tagEnd = html.indexOf('</', jsonStart);
+              if (jsonStart > 0 && tagEnd > jsonStart) {
+                try {
+                  const nextData = JSON.parse(html.substring(jsonStart, tagEnd));
+                  const results = nextData?.props?.pageProps?.initialState?.results ||
+                    nextData?.props?.pageProps?.results || [];
+                  if (results.length > 0) return parseMLResults(results, marca, modelo, estado);
+                } catch(e) {}
+              }
             }
 
-            // Fallback: buscar JSON no body
-            const jsonMatch = html.match(/"results"\s*:\s*(\[[\s\S]*?\])\s*,\s*"(?:filters|sort|available)/);
-            if (jsonMatch) {
-              const results = JSON.parse(jsonMatch[1]);
-              if (results.length > 0) return parseMLResults(results, marca, modelo, estado);
+            // Fallback: buscar "results":[ via indexOf
+            const resIdx = html.indexOf('"results":[');
+            if (resIdx > -1) {
+              try {
+                let depth = 0, start = html.indexOf('[', resIdx), end = start;
+                for (let j = start; j < html.length && j < start + 500000; j++) {
+                  if (html[j] === '[') depth++;
+                  if (html[j] === ']') depth--;
+                  if (depth === 0) { end = j + 1; break; }
+                }
+                const results = JSON.parse(html.substring(start, end));
+                if (results.length > 0) return parseMLResults(results, marca, modelo, estado);
+              } catch(e) {}
             }
           } catch(e) {}
         }
