@@ -23,7 +23,7 @@ async function garimparViaApify() {
   for (const estado of estados) {
     try {
       const apiUrl = 'https://www.webmotors.com.br/api/search/car?url=' +
-        encodeURIComponent('https://www.webmotors.com.br/carros/estoque/' + estado) +
+        encodeURIComponent('https://www.webmotors.com.br/carros/estoque/' + estado + '?PriceRange=5000-100000&YearRange=2012-2026') +
         '&DisplayPerPage=50&DisplayPage=1';
 
       console.log('[APIFY] Buscando ' + estado + '...');
