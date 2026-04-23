@@ -168,8 +168,7 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
         <option value="RS">RS</option>
       </select>
       <input type="text" id="busca" placeholder="🔎 Buscar modelo..." oninput="filtrar()">
-      <button id="btnGarimpar" onclick="garimparAgora()" class="btn-refresh">🔄 Garimpar agora</button>
-      <button id="btnApify" onclick="garimparApify()" class="btn-refresh" style="background:#1a73e8">🤖 Apify</button>
+      <button id="btnApify" onclick="garimparApify()" class="btn-refresh">🔄 Garimpar agora</button>
       <button id="btnAtualizar" onclick="atualizarDados()">📊 Atualizar</button>
       <span id="statusMsg" class="status-msg"></span>
     </div>
@@ -656,8 +655,8 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
     // GARIMPO VIA APIFY (server-side, bypassa PerimeterX)
     // ============================================================
     async function garimparApify() {
-      setBtnLoading('btnApify', true, 'Apify...');
-      setStatus('Iniciando garimpo via Apify (server-side)...', false);
+      setBtnLoading('btnApify', true, 'Garimpando...');
+      setStatus('Iniciando garimpo...', false);
       const inicio = Date.now();
 
       try {
@@ -666,14 +665,14 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
 
         if (data.error) {
           setStatus('Erro: ' + data.error, true);
-          setBtnLoading('btnApify', false, '🤖 Apify');
+          setBtnLoading('btnApify', false, '🔄 Garimpar agora');
           return;
         }
 
         if (data.status === 'already_running') {
           setStatus('Garimpo já rodando, aguarde...', false);
         } else {
-          setStatus('Apify rodando (pode levar 2-3 min)...', false);
+          setStatus('Garimpando (pode levar 2-3 min)...', false);
         }
 
         // Poll status
@@ -685,15 +684,15 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
 
             if (!status.rodando) {
               clearInterval(poll);
-              setBtnLoading('btnApify', false, '🤖 Apify');
+              setBtnLoading('btnApify', false, '🔄 Garimpar agora');
               if (status.oportunidades > 0) {
-                setStatus('Apify: ' + status.oportunidades + ' oportunidades! (' + elapsed + 's)', false);
+                setStatus('Pronto! ' + status.oportunidades + ' oportunidades (' + elapsed + 's)', false);
               } else {
-                setStatus('Apify concluído. ' + status.totalAnalisados + ' analisados. (' + elapsed + 's)', false);
+                setStatus('Concluído. ' + status.totalAnalisados + ' analisados (' + elapsed + 's)', false);
               }
               setTimeout(() => { window.location.reload(); }, 2000);
             } else {
-              setStatus('Apify processando... (' + elapsed + 's)', false);
+              setStatus('Garimpando... (' + elapsed + 's)', false);
             }
           } catch(e) {}
         }, 5000);
@@ -701,12 +700,12 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
         // Timeout 5 min
         setTimeout(() => {
           clearInterval(poll);
-          setBtnLoading('btnApify', false, '🤖 Apify');
+          setBtnLoading('btnApify', false, '🔄 Garimpar agora');
         }, 300000);
 
       } catch (err) {
-        setStatus('Erro Apify: ' + err.message, true);
-        setBtnLoading('btnApify', false, '🤖 Apify');
+        setStatus('Erro: ' + err.message, true);
+        setBtnLoading('btnApify', false, '🔄 Garimpar agora');
       }
     }
 
