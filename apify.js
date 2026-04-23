@@ -87,6 +87,24 @@ async function garimparViaApify() {
 
       console.log('[APIFY] ' + estado + ': ' + results.length + ' brutos');
 
+      // Debug: log primeiro item pra entender estrutura
+      if (results.length > 0) {
+        const first = results[0];
+        console.log('[APIFY] DEBUG keys: ' + Object.keys(first).join(','));
+        const spec = first.Specification || first;
+        const prices = first.Prices || {};
+        const seller = first.Seller || {};
+        console.log('[APIFY] DEBUG spec keys: ' + Object.keys(spec).join(','));
+        console.log('[APIFY] DEBUG prices: ' + JSON.stringify(prices).substring(0, 200));
+        console.log('[APIFY] DEBUG seller: ' + JSON.stringify(seller).substring(0, 200));
+        const gv = (v) => {
+          if (!v) return '';
+          if (typeof v === 'string') return v;
+          return v.Value || v.Name || v.name || v.value || String(v);
+        };
+        console.log('[APIFY] DEBUG modelo: ' + gv(spec.Model) + ', preco: ' + (prices.Price || prices.SearchPrice || 0) + ', ano: ' + (spec.YearFabrication || spec.YearModel));
+      }
+
       for (const item of results) {
         try {
           const spec = item.Specification || item;
