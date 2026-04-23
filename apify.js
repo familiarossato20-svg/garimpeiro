@@ -106,15 +106,26 @@ async function garimparViaApify() {
       console.log('[APIFY] Sample: ' + gv(sp.Make) + ' ' + gv(sp.Model) + ' R$' + (pr.Price||0) + ' ' + (f.Seller?.State||''));
     }
 
+    // Dedup por UniqueId
+    const seen = new Set();
+    const unicos = rawItems.filter(item => {
+      const id = item.UniqueId || '';
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    console.log('[APIFY] Apos dedup: ' + unicos.length + ' (removidos ' + (rawItems.length - unicos.length) + ' duplicatas)');
+
     // Parsear e filtrar
     const todosAnuncios = [];
+    let filtPreco = 0, filtAno = 0, filtEstado = 0;
     const gv = (v) => {
       if (!v) return '';
       if (typeof v === 'string') return v;
       return v.Value || v.Name || v.name || v.value || String(v);
     };
 
-    for (const item of rawItems) {
+    for (const item of unicos) {
       try {
         const spec = item.Specification || item;
         const seller = item.Seller || {};
@@ -122,14 +133,14 @@ async function garimparViaApify() {
 
         const preco = prices.Price || prices.SearchPrice || 0;
         const ano = parseInt(spec.YearFabrication || spec.YearModel) || 0;
-        if (!preco || preco < 5000 || preco > 100000) continue;
-        if (ano && ano < 2012) continue;
+        if (!preco || preco < 5000 || preco > 100000) { filtPreco++; continue; }
+        if (ano && ano < 2012) { filtAno++; continue; }
 
         const sellerState = gv(seller.State);
         const pIdx = sellerState.indexOf('(');
         const cIdx = sellerState.indexOf(')');
         const estadoReal = pIdx > -1 ? sellerState.substring(pIdx + 1, cIdx) : '';
-        if (!['SC', 'PR', 'RS'].includes(estadoReal)) continue;
+        if (!['SC', 'PR', 'RS'].includes(estadoReal)) { filtEstado++; continue; }
 
         todosAnuncios.push({
           fonte: 'Webmotors', 
@@ -146,7 +157,7 @@ async function garimparViaApify() {
       } catch (e) { /* skip */ }
     }
 
-    console.log('[APIFY] Filtrados: ' + todosAnuncios.length + ' anuncios SC/PR/RS R$5k-100k');
+    console.log('[APIFY] Filtrados: ' + todosAnuncios.length + ' anuncios SC/PR/RS R$5k-100k (removidos: preco=' + filtPreco + ' ano=' + filtAno + ' estado=' + filtEstado + ')');
     return todosAnuncios;
 
   } catch (err) {
