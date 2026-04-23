@@ -4,6 +4,7 @@ const config = require('./config');
 const { executarGarimpo } = require('./garimpeiro');
 const { gerarDashboardHTML } = require('./dashboard');
 const { statusAPIs } = require('./fipe');
+const { garimparViaApify, isConfigured: apifyConfigured } = require('./apify');
 const fs = require('fs');
 
 // Criar pasta de resultados
@@ -77,7 +78,63 @@ const server = http.createServer(async (req, res) => {
       temResultado: !!resultado,
       totalAnalisados: resultado?.totalAnalisados || 0,
       oportunidades: resultado?.oportunidades?.length || 0,
+      apifyConfigured: apifyConfigured(),
     }));
+    return;
+  }
+
+  // Garimpo via Apify (bypassa PerimeterX)
+  if (url.pathname === '/api/garimpo-apify' && req.method === 'GET') {
+    if (!apifyConfigured()) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'APIFY_TOKEN não configurado no Railway' }));
+      return;
+    }
+    if (global._garimpoRodando) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'already_running' }));
+      return;
+    }
+
+    global._garimpoRodando = true;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'started', mode: 'apify' }));
+
+    // Rodar garimpo via Apify em background
+    (async () => {
+      try {
+        console.log('[APIFY] Iniciando garimpo via Apify...');
+        const anuncios = await garimparViaApify();
+        console.log(`[APIFY] ${anuncios.length} anúncios coletados`);
+
+        if (anuncios.length > 0) {
+          const { calcularMargem } = require('./margem');
+          const { limparCache } = require('./fipe');
+          limparCache();
+          const oportunidades = await calcularMargem(anuncios);
+
+          const resultado = {
+            data: new Date().toISOString(),
+            totalAnalisados: anuncios.length,
+            oportunidades: oportunidades.slice(0, 50),
+            stats: { totalAnalisados: anuncios.length, fontes: ['Apify-Webmotors'] },
+            fonte: 'apify',
+          };
+
+          const dataStr = new Date().toISOString().split('T')[0];
+          const arquivo = `./resultados/garimpo-${dataStr}.json`;
+          if (!fs.existsSync('./resultados')) fs.mkdirSync('./resultados');
+          fs.writeFileSync(arquivo, JSON.stringify(resultado, null, 2));
+          console.log(`[APIFY] Salvo: ${arquivo} — ${oportunidades.length} oportunidades`);
+        } else {
+          console.log('[APIFY] Nenhum anúncio coletado');
+        }
+      } catch (err) {
+        console.error('[APIFY] Erro:', err.message);
+      } finally {
+        global._garimpoRodando = false;
+      }
+    })();
     return;
   }
 
@@ -191,6 +248,7 @@ const server = http.createServer(async (req, res) => {
       modelosMonitorados: config.modelosPrioritarios.length,
       fontesAtivas: Object.entries(config.fontes).filter(([k,v]) => v).map(([k]) => k),
       fipeAPIs: statusAPIs(),
+      apify: apifyConfigured() ? 'configurado' : 'não configurado — adicione APIFY_TOKEN no Railway',
     }));
     return;
   }
@@ -322,16 +380,48 @@ server.listen(PORT, () => {
   console.log(`📍 Regiões: ${config.filtros.regioes.join(', ')}`);
   console.log(`💰 Margem mínima: R$ ${config.filtros.margemMinima.toLocaleString('pt-BR')}`);
   console.log(`🚗 Modelos monitorados: ${config.modelosPrioritarios.length}`);
-  console.log(`🔎 Fontes ativas: ${fontesAtivas.join(', ')}\n`);
+  console.log(`🔎 Fontes ativas: ${fontesAtivas.join(', ')}`);
+  console.log(`🤖 Apify: ${apifyConfigured() ? 'ATIVO ✅' : 'não configurado'}\n`);
 });
+
+// Função de garimpo agendado (prefere Apify se configurado)
+async function garimpoAgendado() {
+  if (apifyConfigured()) {
+    console.log('[CRON] Usando Apify...');
+    try {
+      const anuncios = await garimparViaApify();
+      if (anuncios.length > 0) {
+        const { calcularMargem } = require('./margem');
+        const { limparCache } = require('./fipe');
+        limparCache();
+        const oportunidades = await calcularMargem(anuncios);
+        const resultado = {
+          data: new Date().toISOString(),
+          totalAnalisados: anuncios.length,
+          oportunidades: oportunidades.slice(0, 50),
+          stats: { totalAnalisados: anuncios.length, fontes: ['Apify-Webmotors'] },
+          fonte: 'apify-cron',
+        };
+        const dataStr = new Date().toISOString().split('T')[0];
+        const arquivo = `./resultados/garimpo-${dataStr}.json`;
+        if (!fs.existsSync('./resultados')) fs.mkdirSync('./resultados');
+        fs.writeFileSync(arquivo, JSON.stringify(resultado, null, 2));
+        console.log(`[CRON] Apify OK: ${oportunidades.length} oportunidades salvas`);
+        return;
+      }
+    } catch(err) { console.error('[CRON] Apify falhou:', err.message); }
+  }
+  // Fallback: garimpo direto (provavelmente vai dar 403)
+  await executarGarimpo();
+}
 
 // Agendar execução diária
 cron.schedule(config.cronSchedule, () => {
   console.log('\n⏰ Execução agendada disparada');
-  executarGarimpo().catch(err => console.error('Erro no garimpo agendado:', err));
+  garimpoAgendado().catch(err => console.error('Erro no garimpo agendado:', err));
 });
 
 if (process.env.RUN_ON_START === 'true') {
   console.log('\n🚀 Executando garimpo inicial...');
-  executarGarimpo().catch(err => console.error('Erro no garimpo inicial:', err));
+  garimpoAgendado().catch(err => console.error('Erro no garimpo inicial:', err));
 }

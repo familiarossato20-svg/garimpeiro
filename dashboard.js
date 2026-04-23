@@ -169,6 +169,7 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
       </select>
       <input type="text" id="busca" placeholder="🔎 Buscar modelo..." oninput="filtrar()">
       <button id="btnGarimpar" onclick="garimparAgora()" class="btn-refresh">🔄 Garimpar agora</button>
+      <button id="btnApify" onclick="garimparApify()" class="btn-refresh" style="background:#1a73e8">🤖 Apify</button>
       <button id="btnAtualizar" onclick="atualizarDados()">📊 Atualizar</button>
       <span id="statusMsg" class="status-msg"></span>
     </div>
@@ -648,6 +649,64 @@ function gerarDashboardHTML(oportunidades, stats, historico) {
       } catch (err) {
         setStatus('Erro: ' + err.message, true);
         setBtnLoading('btnGarimpar', false, '🔄 Garimpar agora');
+      }
+    }
+
+    // ============================================================
+    // GARIMPO VIA APIFY (server-side, bypassa PerimeterX)
+    // ============================================================
+    async function garimparApify() {
+      setBtnLoading('btnApify', true, 'Apify...');
+      setStatus('Iniciando garimpo via Apify (server-side)...', false);
+      const inicio = Date.now();
+
+      try {
+        const resp = await fetch('/api/garimpo-apify');
+        const data = await resp.json();
+
+        if (data.error) {
+          setStatus('Erro: ' + data.error, true);
+          setBtnLoading('btnApify', false, '🤖 Apify');
+          return;
+        }
+
+        if (data.status === 'already_running') {
+          setStatus('Garimpo já rodando, aguarde...', false);
+        } else {
+          setStatus('Apify rodando (pode levar 2-3 min)...', false);
+        }
+
+        // Poll status
+        const poll = setInterval(async () => {
+          try {
+            const st = await fetch('/api/garimpo-status');
+            const status = await st.json();
+            const elapsed = Math.round((Date.now() - inicio) / 1000);
+
+            if (!status.rodando) {
+              clearInterval(poll);
+              setBtnLoading('btnApify', false, '🤖 Apify');
+              if (status.oportunidades > 0) {
+                setStatus('Apify: ' + status.oportunidades + ' oportunidades! (' + elapsed + 's)', false);
+              } else {
+                setStatus('Apify concluído. ' + status.totalAnalisados + ' analisados. (' + elapsed + 's)', false);
+              }
+              setTimeout(() => { window.location.reload(); }, 2000);
+            } else {
+              setStatus('Apify processando... (' + elapsed + 's)', false);
+            }
+          } catch(e) {}
+        }, 5000);
+
+        // Timeout 5 min
+        setTimeout(() => {
+          clearInterval(poll);
+          setBtnLoading('btnApify', false, '🤖 Apify');
+        }, 300000);
+
+      } catch (err) {
+        setStatus('Erro Apify: ' + err.message, true);
+        setBtnLoading('btnApify', false, '🤖 Apify');
       }
     }
 
